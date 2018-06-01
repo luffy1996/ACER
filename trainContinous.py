@@ -6,12 +6,25 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.autograd import Variable
+  from torch.distributions.multivariate_normal import MultivariateNormal
+# from scipy.stats import multivariate_normal
 from memory import EpisodicReplayMemory
 from model import ActorCritic
 from utils import state_to_tensor
+import math
 
 
 # Knuth's algorithm for generating Poisson samples
+def _multivariate_normal_pdf(x, mu, sigma=None):
+  # Note that sigma is a 0.3 * diagnol matrix
+  X = x - mu
+  d = x.shape[-1]
+  X = X**2
+  X = X.sum()
+  X = X*0.3
+  f = torch.exp(-X)/( ((2*math.pi)**(1/d)) * 0.3)
+  return f
+
 def _poisson(lmbd):
   L, k, p = math.exp(-lmbd), 0, 1
   while p > L:
@@ -95,19 +108,21 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
   off_policy = old_policies is not None
   action_size = policies[0].size(1)
   policy_loss, value_loss = 0, 0
-
+  # Qret has the Value V(s(t+1)).
+  Qopc = Qret
   # Calculate n-step returns in forward view, stepping backwards from the last state
   t = len(rewards)
   for i in reversed(range(t)):
     # Importance sampling weights ρ ← π(∙|s_i) / µ(∙|s_i); 1 for on-policy
+    curr_policy = policies[i]
+    old_policy = old_policies[i]
     if off_policy:
-      rho = policies[i].detach() / old_policies[i]
+      rho = _multivariate_normal_pdf(action, curr_policy.detach()) / _multivariate_normal_pdf(action, old_policy.detach())
     else:
       rho = Variable(torch.ones(1, action_size))
-    # Qret has the Value V(s(t+1)).
       
-    # Qopc ← r_i + γQret
-    Qopc = rewards[i] + args.discount * Qret
+    # Qopc ← r_i + γQopc
+    Qopc = rewards[i] + args.discount * Qopc
     # Qret ← r_i + γQret
     Qret = rewards[i] + args.discount * Qret
     # Advantage A ← Qret - V(s_i; θ)
@@ -117,16 +132,20 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     log_prob = policies[i].gather(1, actions[i]).log()
     # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
     # Use Aopc for the actor learning.
-    single_step_policy_loss = -(rho.gather(1, actions[i]).clamp(max=args.trace_max) * log_prob * Aopc.detach()).mean(0)  # Average over batch
+    single_step_policy_loss = -min(rho,args.trace_max) * log_prob * Aopc.detach()).mean(0)  # Average over batch
     # Off-policy bias correction
     # No change here as the Q is estimated from the neural network
     if off_policy:
       # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
       hx, cx = Variable(torch.zeros(args.batch_size, args.hidden_size)), Variable(torch.zeros(args.batch_size, args.hidden_size))
-      policy_dash, Q_dash, _, _ = model(Variable(state), (hx, cx))
-      rho_dash = 
-      bias_weight = (1 - args.trace_max / rho).clamp(min=0) * policies[i]
-      single_step_policy_loss -= (bias_weight * policies[i].log() * (Qs[i].detach() - Vs[i].expand_as(Qs[i]).detach())).sum(1).mean(0)
+      policy_dash, _, _, _ = model(Variable(state), (hx, cx))
+      f_distribution = MultivariateNormal(policy_dash.detach(), torch.eye(policy_dash.shape[-1])*0.3)
+      action_dash = f_distribution.sample()
+      with torch.no_grad():
+        rho_dash = _multivariate_normal_pdf(action_dash, policy_dash) / _multivariate_normal_pdf(action_dash, old_policy)
+      bias_weight = (1 - args.trace_max / rho_dash).clamp(min=0.)
+      _, Q, V, _ = model(Variable(state), (hx, cx))
+      single_step_policy_loss -= (bias_weight * _multivariate_normal_pdf(action_dash, policy_dash) * (Q.detach() - V.detach())).sum(1).mean(0)
     if args.trust_region:
       # Policy update dθ ← dθ + ∂θ/∂θ∙z*
       policy_loss += _trust_region_loss(model, policies[i], average_policies[i], single_step_policy_loss, args.trust_region_threshold)
