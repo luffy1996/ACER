@@ -104,19 +104,27 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
       rho = policies[i].detach() / old_policies[i]
     else:
       rho = Variable(torch.ones(1, action_size))
-
+    # Qret has the Value V(s(t+1)).
+      
+    # Qopc ← r_i + γQret
+    Qopc = rewards[i] + args.discount * Qret
     # Qret ← r_i + γQret
     Qret = rewards[i] + args.discount * Qret
     # Advantage A ← Qret - V(s_i; θ)
     A = Qret - Vs[i]
-
+    Aopc = Qopc - Vs[i]
     # Log policy log(π(a_i|s_i; θ))
     log_prob = policies[i].gather(1, actions[i]).log()
     # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
-    single_step_policy_loss = -(rho.gather(1, actions[i]).clamp(max=args.trace_max) * log_prob * A.detach()).mean(0)  # Average over batch
+    # Use Aopc for the actor learning.
+    single_step_policy_loss = -(rho.gather(1, actions[i]).clamp(max=args.trace_max) * log_prob * Aopc.detach()).mean(0)  # Average over batch
     # Off-policy bias correction
+    # No change here as the Q is estimated from the neural network
     if off_policy:
       # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
+      hx, cx = Variable(torch.zeros(args.batch_size, args.hidden_size)), Variable(torch.zeros(args.batch_size, args.hidden_size))
+      policy_dash, Q_dash, _, _ = model(Variable(state), (hx, cx))
+      rho_dash = 
       bias_weight = (1 - args.trace_max / rho).clamp(min=0) * policies[i]
       single_step_policy_loss -= (bias_weight * policies[i].log() * (Qs[i].detach() - Vs[i].expand_as(Qs[i]).detach())).sum(1).mean(0)
     if args.trust_region:
@@ -130,6 +138,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     policy_loss -= args.entropy_weight * -(policies[i].log() * policies[i]).sum(1).mean(0)  # Sum over probabilities, average over batch
 
     # Value update dθ ← dθ - ∇θ∙1/2∙(Qret - Q(s_i, a_i; θ))^2
+    # This will be Qret. No changes here
     Q = Qs[i].gather(1, actions[i])
     value_loss += ((Qret - Q) ** 2 / 2).mean(0)  # Least squares loss
 
@@ -137,13 +146,14 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     truncated_rho = rho.gather(1, actions[i]).clamp(max=1)
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qret = truncated_rho * (Qret - Q.detach()) + Vs[i].detach()
-
+    # Qret ← 1∙(Qopc - Q(s_i, a_i; θ)) + V(s_i; θ)
+    Qopc = (Qopc - Q.detach()) + Vs[i].detach()
   # Update networks
   _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
 
 
 # Acts and trains model
-def train(rank, args, T, shared_model, shared_average_model, optimiser):
+def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
   torch.manual_seed(args.seed + rank)
 
   env = gym.make(args.env)
@@ -183,12 +193,10 @@ def train(rank, args, T, shared_model, shared_average_model, optimiser):
       while not done and t - t_start < args.t_max:
         # Calculate policy and values
         # hx and cx are hidden states in the LSTM
-
         policy, Q, V, (hx, cx) = model(Variable(state), (hx, cx))
         average_policy, _, _, (avg_hx, avg_cx) = shared_average_model(Variable(state), (avg_hx, avg_cx))
 
         # Sample action
-        # TODO : Maybe he plays it on-policy. Action is sampled from policy
         # action = policy.multinomial().data[0, 0]  # Graph broken as loss for stochastic action calculated manually
         m = torch.distributions.Categorical(policy)
         action = m.sample()

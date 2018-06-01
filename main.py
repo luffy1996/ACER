@@ -42,6 +42,7 @@ parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=25000, metavar='STEPS', help='Number of training steps between evaluations (roughly)')
 parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 parser.add_argument('--render', action='store_true', help='Render evaluation agent')
+parser.add_argument('--continous', type=int, default=0,metavar = 'CONT',help='To specify if continous action game')
 
 
 if __name__ == '__main__':
@@ -54,13 +55,16 @@ if __name__ == '__main__':
   print(' ' * 26 + 'Options')
   for k, v in vars(args).items():
     print(' ' * 26 + k + ': ' + str(v))
-  args.env = 'CartPole-v1'  # TODO: Remove hardcoded environment when code is more adaptable
+  if (args.continous):
+    args.env = 'MountainCarContinuous-v0'
+  else:
+    args.env = 'CartPole-v1'  # TODO: Remove hardcoded environment when code is more adaptable
   # mp.set_start_method(platform.python_version()[0] == '3' and 'spawn' or 'fork')  # Force true spawning (not forking) if available
   torch.manual_seed(args.seed)
   T = Counter()  # Global shared counter
 
   # Create shared network
-  env = gym.make(args.env)
+  env = gym.make(args.env).unwrapped
   shared_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
   shared_model.share_memory()
   if args.model and os.path.isfile(args.model):
