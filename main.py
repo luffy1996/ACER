@@ -6,9 +6,10 @@ import gym
 import torch
 from torch import multiprocessing as mp
 
-from model import ActorCritic
+from model import ActorCritic, ContinousActorCritic
 from optim import SharedRMSprop
 from train import train
+from trainContinous import trainCont
 from test import test
 from utils import Counter
 
@@ -65,15 +66,24 @@ if __name__ == '__main__':
 
   # Create shared network
   env = gym.make(args.env).unwrapped
-  shared_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
-  shared_model.share_memory()
+  if (args.continous):
+    shared_model = ContinousActorCritic(env.observation_space, env.action_space, args.hidden_size)
+    shared_model.share_memory()
+  else:
+    shared_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
+    shared_model.share_memory()
   if args.model and os.path.isfile(args.model):
     # Load pretrained weights
     shared_model.load_state_dict(torch.load(args.model))
   # Create average network
-  shared_average_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
-  shared_average_model.load_state_dict(shared_model.state_dict())
-  shared_average_model.share_memory()
+  if (args.continous):	
+    shared_average_model = ContinousActorCritic(env.observation_space, env.action_space, args.hidden_size)
+    shared_average_model.load_state_dict(shared_model.state_dict())
+    shared_average_model.share_memory()
+  else:
+    shared_average_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
+    shared_average_model.load_state_dict(shared_model.state_dict())
+    shared_average_model.share_memory()
   for param in shared_average_model.parameters():
     param.requires_grad = False
   # Create optimiser for shared network parameters with shared statistics
@@ -90,7 +100,8 @@ if __name__ == '__main__':
   if not args.evaluate:
     # Start training agents
     for rank in range(1, args.num_processes + 1):
-      p = mp.Process(target=train, args=(rank, args, T, shared_model, shared_average_model, optimiser))
+    	# TODO : Make if suitable for cont
+      p = mp.Process(target=trainCont, args=(rank, args, T, shared_model, shared_average_model, optimiser))
       p.start()
       print ('process ',rank, ' started')
       processes.append(p)

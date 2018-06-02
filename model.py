@@ -27,7 +27,7 @@ class ActorCritic(nn.Module):
 
 class ContinousActorCritic(nn.Module):
   def __init__(self, observation_space, action_space, hidden_size):
-    super(ActorCritic, self).__init__()
+    super(ContinousActorCritic, self).__init__()
     self.state_size = observation_space.shape[0]
     # Action Space for COntinous Space
     self.action_size = action_space.shape[0]
