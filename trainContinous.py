@@ -12,7 +12,7 @@ from memory import EpisodicReplayMemory
 from model import ActorCritic, ContinousActorCritic
 from utils import state_to_tensor
 import math
-
+from time import sleep
 
 # Knuth's algorithm for generating Poisson samples
 def _multivariate_normal_pdf(x, mu, sigma=None):
@@ -224,12 +224,16 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         action = MultivariateNormal(policy, torch.eye(policy.shape[-1])*0.3).sample()
         # print("m :", m,"\naction :",action)
         next_state, reward, done, _ = env.step(action)
+        # print (action, next_state, reward, done)
+        # sleep(4)
         next_state = state_to_tensor(next_state)
         reward = args.reward_clip and min(max(reward, -1), 1) or reward  # Optionally clamp rewards
         done = done or episode_length >= args.max_episode_length  # Stop episodes at a max length
         episode_length += 1  # Increase episode counter
 
         # Save (beginning part of) transition for offline training
+        # print(policy.data)
+        # sleep(4)
         memory.append(state, action, reward, policy.data)  # Save just tensors
         # # Save outputs for online training
         # [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions, rewards, average_policies),
@@ -277,8 +281,10 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         # Loop over trajectories (bar last timestep)
         for i in range(len(trajectories) - 1):
           # Unpack first half of transition
-          state = torch.cat((trajectory.state for trajectory in trajectories[i]), 0)
-          action = Variable(torch.LongTensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
+          print (trajectories[i])
+          sleep(10)
+          state = torch.cat((trajectory.state for trajectory in trajectories[i]), )
+          action = Variable(torch.Tensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
           reward = Variable(torch.Tensor([trajectory.reward for trajectory in trajectories[i]])).unsqueeze(1)
           old_policy = Variable(torch.cat((trajectory.policy for trajectory in trajectories[i]), 0))
 
