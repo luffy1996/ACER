@@ -231,9 +231,9 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
         # Save (beginning part of) transition for offline training
         memory.append(state, action, reward, policy.data)  # Save just tensors
-        # Save outputs for online training
-        [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions, rewards, average_policies),
-                                           (policy, Q, V, Variable(torch.LongTensor([[action]])), Variable(torch.Tensor([[reward]])), average_policy))]
+        # # Save outputs for online training
+        # [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions, rewards, average_policies),
+        #                                    (policy, Q, V, Variable(torch.FloatTensor([[action]])), Variable(torch.Tensor([[reward]])), average_policy))]
 
         # Increment counters
         t += 1
