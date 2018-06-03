@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from memory import EpisodicReplayMemory
 from model import ActorCritic
 from utils import state_to_tensor
-
+from time import sleep
 
 # Knuth's algorithm for generating Poisson samples
 def _poisson(lmbd):
@@ -224,13 +224,21 @@ def train(rank, args, T, shared_model, shared_average_model, optimiser):
         Qret = Qret.detach()
 
       # Train the network on-policy
-      _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, average_policies)
+      # _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, average_policies)
 
       # Finish on-policy episode
       if done:
         break
+    # print (not args.on_policy and len(memory) >= args.replay_start)
+    # if (not args.on_policy and len(memory) >= args.replay_start):
+    #   print ('True')
+    #   sleep(5)
+    if (len(memory) >= args.replay_start):
+      print ('True')
+      sleep(5)
 
     # Train the network off-policy when enough experience has been collected
+
     if not args.on_policy and len(memory) >= args.replay_start:
       # Sample a number of off-policy episodes based on the replay ratio
       for _ in range(_poisson(args.replay_ratio)):
@@ -247,6 +255,9 @@ def train(rank, args, T, shared_model, shared_average_model, optimiser):
         # Loop over trajectories (bar last timestep)
         for i in range(len(trajectories) - 1):
           # Unpack first half of transition
+          print (trajectories[i])
+          sleep(10)
+
           state = torch.cat(tuple(trajectory.state for trajectory in trajectories[i]), 0)
           action = torch.LongTensor([trajectory.action for trajectory in trajectories[i]]).unsqueeze(1)
           reward = torch.Tensor([trajectory.reward for trajectory in trajectories[i]]).unsqueeze(1)
