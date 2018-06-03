@@ -51,7 +51,7 @@ def test(rank, args, T, shared_model):
           # Calculate policy
           with torch.no_grad():
             # policy, _, _, (hx, cx) = model(Variable(state, volatile=True), (hx.detach(), cx.detach()))  # Break graph for memory efficiency
-            policy, _, _, (hx, cx) = model(Variable(state), (hx.detach(), cx.detach()))  # Break graph for memory efficiency
+            policy, _, _, (hx, cx),_ = model(Variable(state), (hx.detach(), cx.detach()))  # Break graph for memory efficiency
 
           # Choose action greedily
           action = policy

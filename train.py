@@ -250,6 +250,10 @@ def train(rank, args, T, shared_model, shared_average_model, optimiser):
         # Loop over trajectories (bar last timestep)
         for i in range(len(trajectories) - 1):
           # Unpack first half of transition
+          print (trajectory.state for trajectory in trajectories[i])
+          print ('#################################################')
+
+          sleep(10)
           state = torch.cat((trajectory.state for trajectory in trajectories[i]), 0)
           action = Variable(torch.LongTensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
           reward = Variable(torch.Tensor([trajectory.reward for trajectory in trajectories[i]])).unsqueeze(1)
