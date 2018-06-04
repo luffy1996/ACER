@@ -12,7 +12,7 @@ from train import train
 from trainContinous import trainCont
 from test import test
 from utils import Counter
-
+import csv
 
 parser = argparse.ArgumentParser(description='ACER')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
@@ -24,8 +24,8 @@ parser.add_argument('--hidden-size', type=int, default=32, metavar='SIZE', help=
 parser.add_argument('--model', type=str, metavar='PARAMS', help='Pretrained model (state dict)')
 parser.add_argument('--on-policy', action='store_true', help='Use pure on-policy training (A3C)')
 parser.add_argument('--memory-capacity', type=int, default=1000000, metavar='CAPACITY', help='Experience replay memory capacity')
-parser.add_argument('--replay-ratio', type=int, default=4, metavar='r', help='Ratio of off-policy to on-policy updates')
-parser.add_argument('--replay-start', type=int, default=20000, metavar='EPISODES', help='Number of transitions to save before starting off-policy training')
+parser.add_argument('--replay-ratio', type=int, default=2, metavar='r', help='Ratio of off-policy to on-policy updates')
+parser.add_argument('--replay-start', type=int, default=4000, metavar='EPISODES', help='Number of transitions to save before starting off-policy training')
 parser.add_argument('--discount', type=float, default=0.99, metavar='γ', help='Discount factor')
 parser.add_argument('--trace-decay', type=float, default=1, metavar='λ', help='Eligibility trace decay factor')
 parser.add_argument('--trace-max', type=float, default=10, metavar='c', help='Importance weight truncation (max) value')
@@ -43,7 +43,7 @@ parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=25000, metavar='STEPS', help='Number of training steps between evaluations (roughly)')
 parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 parser.add_argument('--render', action='store_true', help='Render evaluation agent')
-parser.add_argument('--continous', type=int, default=0,metavar = 'CONT',help='To specify if continous action game')
+parser.add_argument('--continous', action='store_true',help='To specify if continous action game')
 
 
 if __name__ == '__main__':
@@ -90,7 +90,10 @@ if __name__ == '__main__':
   optimiser = SharedRMSprop(shared_model.parameters(), lr=args.lr, alpha=args.rmsprop_decay)
   optimiser.share_memory()
   env.close()
-
+  fields = ['T_Value', 'Reward', 'Avg_Steps', 'time']
+  with open('test_results.csv', 'w') as f:
+    writer = csv.writer(f)
+    writer.writerow(fields)
   # Start validation agent
   processes = []
   p = mp.Process(target=test, args=(0, args, T, shared_model))

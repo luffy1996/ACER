@@ -6,7 +6,7 @@ import torch
 from torch.autograd import Variable
 from model import ContinousActorCritic
 from utils import state_to_tensor, plot_line
-
+import csv
 
 def test(rank, args, T, shared_model):
   torch.manual_seed(args.seed + rank)
@@ -67,13 +67,17 @@ def test(rank, args, T, shared_model):
             avg_rewards.append(reward_sum)
             avg_episode_lengths.append(episode_length)
             break
-
+      average_rewards = sum(avg_rewards) / args.evaluation_episodes
+      average_episode_lengths = sum(avg_episode_lengths) / args.evaluation_episodes
       print(('[{}] Step: {:<' + l + '} Avg. Reward: {:<8} Avg. Episode Length: {:<8}').format(
             datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3],
             t_start,
             sum(avg_rewards) / args.evaluation_episodes,
             sum(avg_episode_lengths) / args.evaluation_episodes))
-
+      fields = [t_start, average_rewards, average_episode_lengths, str(datetime.now())]
+      with open('test_results.csv', 'a') as f:
+        writer = csv.writer(f)
+        writer.writerow(fields) 
       if args.evaluate:
         return
 

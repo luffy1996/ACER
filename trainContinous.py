@@ -76,6 +76,7 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   # Compute gradients from original loss
   model.zero_grad()
   loss.backward(retain_graph=True)
+
   # Gradients should be treated as constants (not using detach as volatility can creep in when double backprop is not implemented)
   g = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
   model.zero_grad()
@@ -104,13 +105,13 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   trust_loss = 0
   for param, z_star_p in zip(model.parameters(), z_star):
     trust_loss += (param * z_star_p).sum()
+  # print ('done dana done')
   return trust_loss
 
 
 # Trains model
 def _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions_dash, actions, rewards, Qret, average_policies, old_policies=None):
   # TODO : Remove off Policy parameter
-  off_policy = old_policies is not None
   action_size = policies[0].size(-1)
   policy_loss, value_loss = 0, 0
   # Qret has the Value V(s(t+1)) OR 0.
@@ -127,11 +128,12 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     rho = rho.detach()  
     # Qopc ← r_i + γQopc
     Qopc = rewards[i] + args.discount * Qopc
+    Qopc = Qopc.detach()
     # Qret ← r_i + γQret
     Qret = rewards[i] + args.discount * Qret
-
+    Qret = Qret.detach()
     # Advantage A ← Qret - V(s_i; θ)
-    A = Qret - Vs[i]
+    A = Qret- Vs[i]
     # Advantage Aopc ← Qopc - V(s_i; θ)
     Aopc = Qopc - Vs[i]
     # Log policy log(π(a_i|s_i; θ)) . The pie comes from distribution of multivariate Gaussian.
@@ -141,7 +143,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # Use Aopc for the actor learning.
 
     # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
-    single_step_policy_loss = -(rho).clamp(max=args.trace_max) * log_f * Aopc.detach().mean(0)  # Average over batch
+    single_step_policy_loss = -(rho).clamp(max=args.trace_max).detach() * log_f * Aopc.detach().mean(0)  # Average over batch
 
     # Off-policy bias correction
     # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
@@ -149,9 +151,9 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     rho_dash = _multivariate_normal_pdf(actions_dash[i], curr_policy) / _multivariate_normal_pdf(actions_dash[i], old_policy)
     bias_weight = (1 - args.trace_max / rho_dash).clamp(min=0.).detach()
 
-    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy.detach())
+    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy)
     single_step_policy_loss -= (bias_weight * f_idash_val.log() * (Qs[i].detach() - Vs[i].detach())).sum(1).mean(0)
-    if args.trust_region: 
+    if args.trust_region:
       # Policy update dθ ← dθ + ∂θ/∂θ∙z*
       policy_loss += _trust_region_loss(model, curr_policy, average_policies[i], single_step_policy_loss, args.trust_region_threshold)
     else:
@@ -169,12 +171,13 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # with torch.no_grad():
     truncated_rho = ((rho.clamp(max=1.))**(1/action_size)).detach()
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
-    Qret = truncated_rho * (Qret - Qs[i].detach()) + Vs[i].detach()
+    Qret = truncated_rho * (Qret.detach() - Qs[i].detach()) + Vs[i].detach()
     # Qret ← 1∙(Qopc - Q(s_i, a_i; θ)) + V(s_i; θ)
-    Qopc = (Qopc - Qs[i].detach()) + Vs[i].detach()
+    Qopc = (Qopc.detach() - Qs[i].detach()) + Vs[i].detach()
+
   # Update networks
+
   _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
-  print('reached')
 
 
 # Acts and trains model
@@ -255,8 +258,9 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
     # Train the network when enough experience has been collected
     if len(memory) >= args.replay_start:
       # Sample a number of off-policy episodes based on the replay ratio
-      for _ in range(_poisson(args.replay_ratio)):
+      for _ in range(args.replay_ratio):
         # Act and train off-policy for a batch of (truncated) episode
+
         trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
 
         # Reset hidden state
