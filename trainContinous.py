@@ -213,9 +213,6 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         hx = hx.detach()
         cx = cx.detach()
 
-      # Lists of outputs for training
-      policies, Qs, Vs, actions, rewards, average_policies = [], [], [], [], [], []
-
       while not done and t - t_start < args.t_max:
         # Calculate policy and values
         # hx and cx are hidden states in the LSTM
