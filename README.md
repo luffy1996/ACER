@@ -4,7 +4,7 @@ ACER
 
 Actor-critic with experience replay (ACER) [[1]](#references). Uses batch off-policy updates to improve stability. Trust region updates can be enabled with `--trust-region`. Currently uses full trust region instead of "efficient" trust region (see [issue #1](https://github.com/Kaixhin/ACER/issues/1)).
 
-Run with `python main.py --continous <options>`. To run asynchronous advantage actor-critic (A3C) [[2]](#references) (but with a Q-value head), use the `--on-policy` option.
+Run with `python main.py --continous <options>`. To run asynchronous advantage actor-critic (A3C) [[2]](#references) (but with a Q-value head) . This code has no support for the on-policy actor critic learning.
 
 Note
 ------------
