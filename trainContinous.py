@@ -13,7 +13,7 @@ from model import ActorCritic, ContinousActorCritic
 from utils import state_to_tensor
 import math
 from time import sleep
-
+import numpy as np
 # Knuth's algorithm for generating Poisson samples
 def _multivariate_normal_pdf(x, mu, sigma=None):
   # Note that sigma is a 0.3 * diagnol matrix
@@ -21,8 +21,8 @@ def _multivariate_normal_pdf(x, mu, sigma=None):
   d = x.shape[-1]
   X = X**2
   X = X.sum()
-  X = X*0.3
-  f = torch.exp(-X)/( ((2*math.pi)**(1/d)) * 0.3)
+  X = X/(0.09)
+  f = torch.exp(-X*0.5)/( (((2*math.pi)*(d))**0.5)* (0.3**(d)) )
   return f
 
 def _poisson(lmbd):
@@ -137,7 +137,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # Advantage Aopc ← Qopc - V(s_i; θ)
     Aopc = Qopc - Vs[i]
     # Log policy log(π(a_i|s_i; θ)) . The pie comes from distribution of multivariate Gaussian.
-    f_i_val = _multivariate_normal_pdf(actions[i], curr_policy)
+    f_i_val = _multivariate_normal_pdf(actions[i], curr_policy).clamp(min=0.0001)
     log_f = f_i_val.log()
 
     # Use Aopc for the actor learning.
@@ -151,18 +151,29 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     rho_dash = _multivariate_normal_pdf(actions_dash[i], curr_policy) / _multivariate_normal_pdf(actions_dash[i], old_policy)
     bias_weight = (1 - args.trace_max / rho_dash).clamp(min=0.).detach()
 
-    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy)
+    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy).clamp(min=0.0001)
+    # print('f_idash_val' , f_idash_val)
+    # print ('QS CHECK' , Qs[i],'Vs', Vs[i])
+    # print ('QS check ',(Qs[i].detach() - Vs[i].detach()))
+    # print ('f val', f_idash_val.log())
     single_step_policy_loss -= (bias_weight * f_idash_val.log() * (Qs[i].detach() - Vs[i].detach())).sum(1).mean(0)
+    # print ('single_step_policy_loss Check',single_step_policy_loss.item())  
+
     if args.trust_region:
       # Policy update dθ ← dθ + ∂θ/∂θ∙z*
       policy_loss += _trust_region_loss(model, curr_policy, average_policies[i], single_step_policy_loss, args.trust_region_threshold)
     else:
       # Policy update dθ ← dθ + ∂θ/∂θ∙g
       policy_loss += single_step_policy_loss
-
+    # print ('Entropy Check',policy_loss.item())
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ)
     policy_loss -= args.entropy_weight * -(f_idash_val.log() * f_idash_val).sum().mean(0)  # Sum over probabilities, average over batch
-
+    # print ('checking ',policy_loss)
+    # if math.isnan(policy_loss.item()):
+    #   print('Debug 2 ')
+    #   print (policy_loss)
+    #   print(single_step_policy_loss)
+    #   sleep(10)
     # Value update dθ ← dθ - ∇θ∙1/2∙(Qret - Q(s_i, a_i; θ))^2
     # This will be Qret. No changes here
     value_loss += ((Qret - Qs[i]) ** 2 / 2).mean(0)  # Least squares loss
@@ -203,27 +214,21 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
       # Reset or pass on hidden state
       if done:
-        hx, avg_hx = Variable(torch.zeros(1, args.hidden_size)), Variable(torch.zeros(1, args.hidden_size))
-        cx, avg_cx = Variable(torch.zeros(1, args.hidden_size)), Variable(torch.zeros(1, args.hidden_size))
         # Reset environment and done flag
         state = state_to_tensor(env.reset())
         done, episode_length = False, 0
-      else:
-        # Perform truncated backpropagation-through-time (allows freeing buffers after backwards call)
-        hx = hx.detach()
-        cx = cx.detach()
 
-      while not done and t - t_start < args.t_max:
+      while not done:
         # Calculate policy and values
-        # hx and cx are hidden states in the LSTM
-        policy, Q, V, (hx, cx), action = model(Variable(state), (hx, cx))
-        average_policy, _, _, (avg_hx, avg_cx),_ = shared_average_model(Variable(state), (avg_hx, avg_cx))
+        policy, Q, V, action = model(Variable(state))
+        average_policy, _, _, _ = shared_average_model(Variable(state))
 
         # Perform Action
+        action = action.clamp(min=-2.0,max=2.0) 
         next_state, reward, done, _ = env.step(action)
         next_state = state_to_tensor(next_state)
         # TODO Check clamp rewards
-        # reward = args.reward_clip and min(max(reward, -1), 1) or reward  # Optionally clamp rewards
+        reward = args.reward_clip and min(max(reward, -2.0), 2.0) or reward  # Optionally clamp rewards
         done = done or episode_length >= args.max_episode_length  # Stop episodes at a max length
         episode_length += 1  # Increase episode counter
 
@@ -243,10 +248,6 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         Qret = Variable(torch.zeros(1, 1))   
         # Save terminal state for offline training
         memory.append(state, None, None, None)
-      else:
-        # Qret = V(s_i; θ) for non-terminal s
-        _, _, Qret, _ , _= model(Variable(state), (hx, cx))
-        Qret = Qret.detach()
 
       # Finish episode
       if done:
@@ -260,10 +261,6 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
         trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
 
-        # Reset hidden state
-        hx, avg_hx = Variable(torch.zeros(args.batch_size, args.hidden_size)), Variable(torch.zeros(args.batch_size, args.hidden_size))
-        cx, avg_cx = Variable(torch.zeros(args.batch_size, args.hidden_size)), Variable(torch.zeros(args.batch_size, args.hidden_size))
-
         # Lists of outputs for training
         policies, Qs, Vs,actions_dash, actions, rewards, old_policies, average_policies = [], [], [], [], [], [], [], []
 
@@ -275,11 +272,15 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
           action = Variable(torch.Tensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
           reward = Variable(torch.Tensor([trajectory.reward for trajectory in trajectories[i]])).unsqueeze(1)
           old_policy = Variable(torch.cat(tuple((trajectory.policy for trajectory in trajectories[i])), 0))
-
+          # print ('Check states')
+          # print (state)
           # Calculate policy and values
-          policy, Q, V, (hx, cx),action_dash = model(Variable(state), (hx, cx))
-          average_policy, _, _, (avg_hx, avg_cx),_ = shared_average_model(Variable(state), (avg_hx, avg_cx))
-
+          policy, Q, V,action_dash = model(Variable(state))
+          average_policy, _, _ ,_ = shared_average_model(Variable(state))
+          action_dash = action_dash.clamp(min=-2.0,max=2.0) 
+          # print('Check 33')
+          # print (Q,V)
+          # sleep(10)
           # Save outputs for offline training
           [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions_dash, actions, rewards, average_policies, old_policies),
                                              (policy, Q, V, action_dash, action, reward, average_policy, old_policy))]
@@ -289,7 +290,7 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
           done = Variable(torch.Tensor([trajectory.action is None for trajectory in trajectories[i + 1]]).unsqueeze(1))
 
         # Do forward pass for all transitions
-        _, _, Qret, _ ,_= model(Variable(next_state), (hx, cx))
+        _, _, Qret,_= model(Variable(next_state))
         # Qret = 0 for terminal s, V(s_i; θ) otherwise
         Qret = ((1 - done) * Qret).detach()
 
