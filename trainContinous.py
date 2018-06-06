@@ -32,6 +32,11 @@ def _poisson(lmbd):
     p *= random.uniform(0, 1)
   return max(k - 1, 0)
 
+def _importance_sampling(pie, beta, action):
+  rho = np.array([(_multivariate_normal_pdf(action, pie) / _multivariate_normal_pdf(action, beta)).detach()])
+  rho[np.isnan(rho)] = 1
+  rho = np.nan_to_num(rho)
+  return max(rho[0],0.00001)
 
 # Transfers gradients from thread-specific model to shared model
 def _transfer_grads_to_shared_model(model, shared_model):
@@ -124,8 +129,10 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
 
     # Importance sampling weights ρ ← π(∙|s_i) / µ(∙|s_i); 1 for on-policy
     # with torch.no_grad():
-    rho = _multivariate_normal_pdf(actions[i], curr_policy) / _multivariate_normal_pdf(actions[i], old_policy)
-    rho = rho.detach()  
+    rho = _importance_sampling(curr_policy.detach(), old_policy.detach(), actions[i])
+
+    # _multivariate_normal_pdf(actions[i], curr_policy) / _multivariate_normal_pdf(actions[i], old_policy)
+    # rho = rho.detach()  
     # Qopc ← r_i + γQopc
     Qopc = rewards[i] + args.discount * Qopc
     Qopc = Qopc.detach()
@@ -143,20 +150,25 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # Use Aopc for the actor learning.
 
     # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
-    single_step_policy_loss = -(rho).clamp(max=args.trace_max).detach() * log_f * Aopc.detach().mean(0)  # Average over batch
+    with torch.no_grad():
+      new_rho = torch.from_numpy(np.array([rho]))
+      new_rho = new_rho.clamp(max = args.trace_max).item()
+    single_step_policy_loss = -new_rho * log_f * Aopc.detach().mean(0)  # Average over batch
 
     # Off-policy bias correction
     # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
     # with torch.no_grad():
-    rho_dash = _multivariate_normal_pdf(actions_dash[i], curr_policy) / _multivariate_normal_pdf(actions_dash[i], old_policy)
-    bias_weight = (1 - args.trace_max / rho_dash).clamp(min=0.).detach()
+    rho_dash = torch.from_numpy(np.array([_importance_sampling(curr_policy, old_policy, actions_dash[i])]))
 
-    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy).clamp(min=0.0001)
+    # _multivariate_normal_pdf(actions_dash[i], curr_policy) / _multivariate_normal_pdf(actions_dash[i], old_policy)
+    bias_weight = torch.tensor([max(0.,(1 - args.trace_max / rho_dash.detach()))])
+
+    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy).clamp(min=0.0001,max = 100000)
     # print('f_idash_val' , f_idash_val)
     # print ('QS CHECK' , Qs[i],'Vs', Vs[i])
     # print ('QS check ',(Qs[i].detach() - Vs[i].detach()))
     # print ('f val', f_idash_val.log())
-    single_step_policy_loss -= (bias_weight * f_idash_val.log() * (Qs[i].detach() - Vs[i].detach())).sum(1).mean(0)
+    single_step_policy_loss -= (bias_weight[0] * f_idash_val.log() * (Qs[i].detach() - Vs[i].detach())).sum(1).mean(0)
     # print ('single_step_policy_loss Check',single_step_policy_loss.item())  
 
     if args.trust_region:
@@ -180,8 +192,10 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
 
     # Truncated importance weight ρ¯_a_i = min(1, ρ_a_i)
     # with torch.no_grad():
-    truncated_rho = ((rho.clamp(max=1.))**(1/action_size)).detach()
+    truncated_rho = (torch.from_numpy(np.array([rho])).clamp(max = 1.))**(1/action_size)
+    truncated_rho = truncated_rho.item()
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
+    # print(type(truncated_rho), type((Qret.detach() - Qs[i].detach())), type(Vs[i]))
     Qret = truncated_rho * (Qret.detach() - Qs[i].detach()) + Vs[i].detach()
     # Qret ← 1∙(Qopc - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qopc = (Qopc.detach() - Qs[i].detach()) + Vs[i].detach()
