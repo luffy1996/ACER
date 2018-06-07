@@ -88,8 +88,8 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
 
   # KL divergence k ← ∇θ0∙DKL[π(∙|s_i; θ_a) || π(∙|s_i; θ)]
   # TODO : Check log()
-  action_sample = MultivariateNormal(distribution.detach(), torch.eye(distribution.shape[-1])*0.3).sample()
-  kl = F.kl_div(_multivariate_normal_pdf(action_sample, distribution).log(),_multivariate_normal_pdf(action_sample, ref_distribution), size_average=False)
+  action_sample = MultivariateNormal(distribution.detach(), torch.eye(distribution.shape[-1])*0.09).sample()
+  kl = F.kl_div(_multivariate_normal_pdf(action_sample, distribution).clamp(min=0.000001).log(),_multivariate_normal_pdf(action_sample, ref_distribution).clamp(min=0.000001), size_average=False)
   # Compute gradients from (negative) KL loss (increases KL divergence)
   (-kl).backward(retain_graph=True)
   k = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
@@ -101,7 +101,10 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   # Compute trust region update
   # To remove the warning, added item() to the expression.
   # if k_dot_k.data[0] > 0:
+  # z = 0
   if k_dot_k.item() > 0:
+    # print ('true')
+    # z = 1
     trust_factor = ((k_dot_g - threshold) / k_dot_k).clamp(min=0)
   else:
     trust_factor = Variable(torch.zeros(1))
