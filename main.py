@@ -16,7 +16,8 @@ import csv
 from datetime import datetime
 
 parser = argparse.ArgumentParser(description='ACER')
-parser.add_argument('--name', type=str, help='Random seed')
+parser.add_argument('--name', type=str, help='name of the folder to save file')
+parser.add_argument('--env', type=str, default='Pendulum-v0', )
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
 parser.add_argument('--num-processes', type=int, default=4, metavar='N', help='Number of training async agents (does not include single validation agent)')
 parser.add_argument('--T-max', type=int, default=100000, metavar='STEPS', help='Number of training steps')
@@ -56,15 +57,16 @@ if __name__ == '__main__':
   # Setup
   args = parser.parse_args()
   print(' ' * 26 + 'Options')
+  myfile = open('results/' + args.name + '/params.txt', 'w')
   for k, v in vars(args).items():
     print(' ' * 26 + k + ': ' + str(v))
+    myfile.write(k + ' : ' + str(v))
   if (args.continous):
-    args.env = 'Pendulum-v0'
-  else:
-    args.env = 'CartPole-v1'  # TODO: Remove hardcoded environment when code is more adaptable
+    args.env = 'Pendulum-v0' # TODO: Remove hardcoded environment when code is more adaptable
   # mp.set_start_method(platform.python_version()[0] == '3' and 'spawn' or 'fork')  # Force true spawning (not forking) if available
   torch.manual_seed(args.seed)
   T = Counter()  # Global shared counter
+  myfile.close()
 
   # Create shared network
   env = gym.make(args.env).unwrapped

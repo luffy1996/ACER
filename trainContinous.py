@@ -89,7 +89,9 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   # KL divergence k ← ∇θ0∙DKL[π(∙|s_i; θ_a) || π(∙|s_i; θ)]
   # TODO : Check log()
   action_sample = MultivariateNormal(distribution.detach(), torch.eye(distribution.shape[-1])*0.09).sample()
-  kl = F.kl_div(_multivariate_normal_pdf(action_sample, distribution).clamp(min=0.000001).log(),_multivariate_normal_pdf(action_sample, ref_distribution).clamp(min=0.000001), size_average=False)
+  _distribution = _multivariate_normal_pdf(action_sample, distribution).clamp(min=0.000001)
+  _ref_distribution = _multivariate_normal_pdf(action_sample, ref_distribution).clamp(min=0.000001)
+  kl = (_ref_distribution * (_ref_distribution.log() - _distribution.log())).sum(1)
   # Compute gradients from (negative) KL loss (increases KL divergence)
   (-kl).backward(retain_graph=True)
   k = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
