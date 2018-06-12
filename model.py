@@ -51,7 +51,8 @@ class ContinousActorCritic(nn.Module):
     self.relu = nn.ReLU(inplace=True)
     
     self.fc1 = nn.Linear(self.state_size, hidden_size)
-    self.fc2 = nn.Linear(hidden_size, hidden_size)
+    self.lstm = nn.LSTMCell(hidden_size, hidden_size)
+    # self.fc2 = nn.Linear(hidden_size, hidden_size)
     self.fc_actor = nn.Linear(hidden_size, self.action_size)
     # The value is action independent
     self.fc_critic_value = nn.Linear(hidden_size, 1)
@@ -60,12 +61,12 @@ class ContinousActorCritic(nn.Module):
 
     self.fc_critic_advantage = nn.Linear(hidden_size, 1)
 
-  def forward(self, x0):
+  def forward(self, x0, h):
     Q = None
     state = x0
     x1 = self.relu(self.fc1(x0))
-    x = self.relu(self.fc2(x1))  # h is (hidden state, cell state)
-
+    h = self.lstm(x1, h)  # h is (hidden state, cell state)
+    x = h[0]
     policy = self.fc_actor(x)  # Prevent 1s and hence NaNs
     V = self.fc_critic_value(x)
     # Adding state and action for stochiastic duelling network
@@ -73,6 +74,8 @@ class ContinousActorCritic(nn.Module):
     actions = policy.data
 
     action_samples = [Variable(torch.normal(policy.data, torch.exp(torch.ones(policy.size(0), 1))*0.09)) for _ in range(5)]
+    # print (action_samples)
+    # sleep(10)
     advantage_samples = torch.cat([self.Advantage(x, action_sample).unsqueeze(-1) for action_sample in action_samples], -1)
     A = self.Advantage(x, actions)
     Q = V + A - advantage_samples.mean(-1)
@@ -89,7 +92,7 @@ class ContinousActorCritic(nn.Module):
     #   sleep(100)
     # print(Q.data,V.data,A.data, action_samples,advantage_samples)
     # sleep(10)
-    return policy, Q, V, actions
+    return policy, Q, V, actions, h
 
   
   def Advantage(self, x, actions):

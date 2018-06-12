@@ -56,6 +56,7 @@ if __name__ == '__main__':
 
   # Setup
   args = parser.parse_args()
+  os.system('mkdir -p  results/' + args.name)
   print(' ' * 26 + 'Options')
   myfile = open('results/' + args.name + '/params.txt', 'w')
   for k, v in vars(args).items():

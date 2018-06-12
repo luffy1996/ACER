@@ -91,7 +91,7 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   action_sample = MultivariateNormal(distribution.detach(), torch.eye(distribution.shape[-1])*0.09).sample()
   _distribution = _multivariate_normal_pdf(action_sample, distribution).clamp(min=0.000001)
   _ref_distribution = _multivariate_normal_pdf(action_sample, ref_distribution).clamp(min=0.000001)
-  kl = (_ref_distribution * (_ref_distribution.log() - _distribution.log())).sum(1)
+  kl = (_ref_distribution * (_ref_distribution.log() - _distribution.log())).sum()
   # Compute gradients from (negative) KL loss (increases KL divergence)
   (-kl).backward(retain_graph=True)
   k = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
@@ -234,16 +234,18 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
       # Reset or pass on hidden state
       if done:
         # Reset environment and done flag
+        hx, avg_hx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
+        cx, avg_cx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
         state = state_to_tensor(env.reset())
         done, episode_length = False, 0
 
       while not done:
         # Calculate policy and values
-        policy, Q, V, action = model(Variable(state))
-        average_policy, _, _, _ = shared_average_model(Variable(state))
+        policy, Q, V, action, (hx, cx) = model(Variable(state), (hx, cx))
+        average_policy, _, _, _, (avg_hx, avg_cx) = shared_average_model(Variable(state), (avg_hx, avg_cx))
 
         # Perform Action
-        action = action.clamp(min=-2.0,max=2.0) 
+        # action = action.clamp(min=-2.0,max=2.0) 
         next_state, reward, done, _ = env.step(action)
         next_state = state_to_tensor(next_state)
         # TODO Check clamp rewards
@@ -262,6 +264,7 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         state = next_state
 
       # Break graph for last values calculated (used for targets, not directly as model outputs)
+      # The else statement is not needed here . Because we ain't doing the A3C Update. # CHECK
       if done:
         # Qret = 0 for terminal state
         Qret = Variable(torch.zeros(1, 1))   
@@ -280,6 +283,10 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
         trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
 
+        # Reset hidden state
+        hx, avg_hx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
+        cx, avg_cx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
+        
         # Lists of outputs for training
         policies, Qs, Vs,actions_dash, actions, rewards, old_policies, average_policies = [], [], [], [], [], [], [], []
 
@@ -294,12 +301,10 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
           # print ('Check states')
           # print (state)
           # Calculate policy and values
-          policy, Q, V,action_dash = model(Variable(state))
-          average_policy, _, _ ,_ = shared_average_model(Variable(state))
-          action_dash = action_dash.clamp(min=-2.0,max=2.0) 
-          # print('Check 33')
-          # print (Q,V)
-          # sleep(10)
+          policy, Q, V,action_dash,  (hx, cx) = model(Variable(state),  (hx, cx))
+          average_policy, _, _ ,_ , (avg_hx, avg_cx)  = shared_average_model(Variable(state),  (avg_hx, avg_cx))
+          # action_dash = action_dash.clamp(min=-2.0,max=2.0) 
+
           # Save outputs for offline training
           [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions_dash, actions, rewards, average_policies, old_policies),
                                              (policy, Q, V, action_dash, action, reward, average_policy, old_policy))]
@@ -309,7 +314,7 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
           done = Variable(torch.Tensor([trajectory.action is None for trajectory in trajectories[i + 1]]).unsqueeze(1))
 
         # Do forward pass for all transitions
-        _, _, Qret,_= model(Variable(next_state))
+        _, _, Qret, _, _ = model(Variable(next_state), (hx, cx))
         # Qret = 0 for terminal s, V(s_i; θ) otherwise
         Qret = ((1 - done) * Qret).detach()
 
