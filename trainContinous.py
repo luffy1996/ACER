@@ -14,7 +14,6 @@ from utils import state_to_tensor
 import math
 from time import sleep
 import numpy as np
-# Knuth's algorithm for generating Poisson samples
 def _multivariate_normal_pdf(x, mu, sigma=None):
   # Note that sigma is a 0.3 * diagnol matrix
   X = x - mu
@@ -22,9 +21,11 @@ def _multivariate_normal_pdf(x, mu, sigma=None):
   X = X**2
   X = X.sum()
   X = X/(0.09)
-  f = torch.exp(-X*0.5)/( (((2*math.pi)*(d))**0.5)* (0.3**(d)) )
+  # f = torch.exp(-X*0.5)/( (((2*math.pi)*(d))**0.5)* (0.3**(d)) )
+  f = torch.exp(-X*0.5)/( ( (2*math.pi)**0.5 )* (0.3**(d)) )
   return f
 
+# Knuth's algorithm for generating Poisson samples
 def _poisson(lmbd):
   L, k, p = math.exp(-lmbd), 0, 1
   while p > L:
@@ -133,7 +134,6 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     old_policy = old_policies[i]
 
     # Importance sampling weights ρ ← π(∙|s_i) / µ(∙|s_i); 1 for on-policy
-    # with torch.no_grad():
     rho = _importance_sampling(curr_policy.detach(), old_policy.detach(), actions[i])
 
     # _multivariate_normal_pdf(actions[i], curr_policy) / _multivariate_normal_pdf(actions[i], old_policy)
@@ -185,12 +185,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # print ('Entropy Check',policy_loss.item())
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ)
     policy_loss -= args.entropy_weight * -(f_idash_val.log() * f_idash_val).sum().mean(0)  # Sum over probabilities, average over batch
-    # print ('checking ',policy_loss)
-    # if math.isnan(policy_loss.item()):
-    #   print('Debug 2 ')
-    #   print (policy_loss)
-    #   print(single_step_policy_loss)
-    #   sleep(10)
+
     # Value update dθ ← dθ - ∇θ∙1/2∙(Qret - Q(s_i, a_i; θ))^2
     # This will be Qret. No changes here
     value_loss += ((Qret - Qs[i]) ** 2 / 2).mean(0)  # Least squares loss
@@ -224,6 +219,7 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
   t = 1  # Thread step counter
   done = True  # Start new episode
+
   while T.value() <= args.T_max:
     while True:
       # Sync with shared model at least every t_max steps
@@ -238,6 +234,10 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         cx, avg_cx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
         state = state_to_tensor(env.reset())
         done, episode_length = False, 0
+      else:
+        # Perform truncated backpropagation-through-time
+        hx = hx.detach()
+        cx = cx.detach()
 
       while not done:
         # Calculate policy and values
