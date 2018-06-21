@@ -11,6 +11,45 @@ from memory import EpisodicReplayMemory
 from model import ActorCritic
 from utils import state_to_tensor
 
+# Knuth's algorithm for generating Poisson samples
+def _poisson(lmbd):
+  L, k, p = math.exp(-lmbd), 0, 1
+  while p > L:
+    k += 1
+    p *= random.uniform(0, 1)
+  return max(k - 1, 0)
+
+# Adjusts learning rate
+def _adjust_learning_rate(optimiser, lr):
+  for param_group in optimiser.param_groups:
+    param_group['lr'] = lr
+
+# Transfers gradients from thread-specific model to shared model
+def _transfer_grads_to_shared_model(model, shared_model):
+  for param, shared_param in zip(model.parameters(), shared_model.parameters()):
+    if shared_param.grad is not None:
+      return
+    shared_param._grad = param.grad
+
+def _update_networks(args, T, model, shared_model, shared_average_model, loss, optimiser):
+  # Zero shared and local grads
+  optimiser.zero_grad()
+  """
+  Calculate gradients for gradient descent on loss functions
+  Note that math comments follow the paper, which is formulated for gradient ascent
+  """
+  loss.backward()
+  # Gradient L2 normalisation
+  nn.utils.clip_grad_norm_(model.parameters(), args.max_gradient_norm)
+
+  # Transfer gradients to shared model and update
+  _transfer_grads_to_shared_model(model, shared_model)
+  optimiser.step()
+
+  if args.lr_decay:
+    # Linearly decay learning rate
+    _adjust_learning_rate(optimiser, max(args.lr * (args.T_max - T.value()) / args.T_max, 1e-32))
+
 
 # Trains model
 def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, mu_policies, old_policies):
@@ -19,11 +58,12 @@ def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, r
 
   # Calculate n-step returns in forward view, stepping backwards from the last state
   t = len(rewards)
+  counter = 0
 
   for i in reversed(range(t)):
     # Importance sampling weights ρ ← π(∙|s_i) / µ(∙|s_i); 1 for on-policy
-    
-    r = policies[i].detach() / old_policies[i]
+    counter += 1
+    rho = policies[i].detach() / old_policies[i]
     rho_prime = old_policies[i] / mu_policies[i]
 
     # Qret ← r_i + γQret
@@ -33,8 +73,12 @@ def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, r
     Amodel = Qs[i] - Vs.expand_as(Qs[i])
 
     # Log policy log(π(a_i|s_i; θ))
-    policy_loss += rho_prime * (torch.min(r*A.detach(), torch.clamp(r, min=1-epsilon, max=1-epsilon)*A.detach()))
-    trucation_policy_loss += ((1 - args.trace_max / rho_prime).clamp(min=0) * policies[i].log() * Amodel.detach()).sum(1).mean(0)
+    r = rho.gather(1, actions[i])
+    policy_loss += rho_prime.gather(1, actions[i]) * (torch.min(r*A.detach(), torch.clamp(r, min=1-epsilon, max=1+epsilon)*A.detach()))
+    # Calculating truncation loss
+    bias_weight = (1 - args.trace_max / rho).clamp(min=0) * old_policies[i]
+    truncated_loss = torch.min(rho*Amodel.detach(), torch.clamp(rho, min=1-epsilon, max=1-epsilon)*Amodel.detach())
+    trucation_policy_loss += (bias_weight.detach() * truncated_loss).sum(1).mean(0)
 
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ))
     entropy_loss -= args.entropy_weight * -(policies[i].log() * policies[i]).sum(1).mean(0)  # Sum over probabilities, average over batch
@@ -47,12 +91,18 @@ def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, r
     truncated_rho = rho_prime.gather(1, actions[i]).clamp(max=1)
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qret = truncated_rho * (Qret - Q.detach()) + Vs[i].detach()
-        
+
+    #update network
+    if counter==50:
+      _update_networks(args, T, model, shared_model, (policy_loss + value_loss + entropy_loss)/counter, optimiser)
+      counter, policy_loss, value_loss, entropy_loss = 0, 0, 0, 0
+
   # Update networks
-  _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
+  if counter!=0:
+    _update_networks(args, T, model, shared_model, (policy_loss + value_loss + entropy_loss)/counter, optimiser)
 
 
-def trainSEPPO(rank, args, T, shared_model, shared_model, optimiser):
+def trainSEPPO(rank, args, T, shared_model, optimiser):
   torch.manual_seed(args.seed + rank)
 
   env = gym.make(args.env)
