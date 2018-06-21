@@ -15,7 +15,7 @@ from utils import state_to_tensor
 # Trains model
 def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, mu_policies, old_policies):
   action_size = policies[0].size(1)
-  policy_loss, value_loss = 0, 0
+  policy_loss, value_loss, entropy_loss = 0, 0, 0
 
   # Calculate n-step returns in forward view, stepping backwards from the last state
   t = len(rewards)
@@ -33,35 +33,21 @@ def _train(args, T, model, shared_model, optimiser, policies, Qs, Vs, actions, r
     Amodel = Qs[i] - Vs.expand_as(Qs[i])
 
     # Log policy log(π(a_i|s_i; θ))
-    policy_loss += torch.min(r*A, torch.clamp(r, min=1-epsilon, max=1-epsilon)*A)
-    log_prob = policies[i].gather(1, actions[i]).log()
-
-    # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
-    single_step_policy_loss = -(rho.gather(1, actions[i]).clamp(max=args.trace_max) * log_prob * A.detach()).mean(0)  # Average over batch
-    # Off-policy bias correction
-    if off_policy:
-      # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
-      bias_weight = (1 - args.trace_max / rho).clamp(min=0) * policies[i]
-      single_step_policy_loss -= (bias_weight * policies[i].log() * (Qs[i].detach() - Vs[i].expand_as(Qs[i]).detach())).sum(1).mean(0)
-    if args.trust_region:
-      # Policy update dθ ← dθ + ∂θ/∂θ∙z*
-      policy_loss += _trust_region_loss(model, policies[i], average_policies[i], single_step_policy_loss, args.trust_region_threshold)
-    else:
-      # Policy update dθ ← dθ + ∂θ/∂θ∙g
-      policy_loss += single_step_policy_loss
+    policy_loss += rho_prime * (torch.min(r*A.detach(), torch.clamp(r, min=1-epsilon, max=1-epsilon)*A.detach()))
+    trucation_policy_loss += ((1 - args.trace_max / rho_prime).clamp(min=0) * policies[i].log() * Amodel.detach()).sum(1).mean(0)
 
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ))
-    policy_loss -= args.entropy_weight * -(policies[i].log() * policies[i]).sum(1).mean(0)  # Sum over probabilities, average over batch
+    entropy_loss -= args.entropy_weight * -(policies[i].log() * policies[i]).sum(1).mean(0)  # Sum over probabilities, average over batch
 
     # Value update dθ ← dθ - ∇θ∙1/2∙(Qret - Q(s_i, a_i; θ))^2
     Q = Qs[i].gather(1, actions[i])
     value_loss += ((Qret - Q) ** 2 / 2).mean(0)  # Least squares loss
 
     # Truncated importance weight ρ¯_a_i = min(1, ρ_a_i)
-    truncated_rho = rho.gather(1, actions[i]).clamp(max=1)
+    truncated_rho = rho_prime.gather(1, actions[i]).clamp(max=1)
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qret = truncated_rho * (Qret - Q.detach()) + Vs[i].detach()
-
+        
   # Update networks
   _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
 
