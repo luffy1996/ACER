@@ -9,7 +9,7 @@ from torch import multiprocessing as mp
 
 from model import ActorCritic
 from optim import SharedRMSprop
-from train import train
+from acer import train
 from test import test
 from utils import Counter
 
@@ -45,7 +45,7 @@ parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', 
 parser.add_argument('--render', action='store_true', help='Render evaluation agent')
 parser.add_argument('--name', type=str, default='results', help='Save folder')
 parser.add_argument('--env', type=str, default='CartPole-v1',help='environment name')
-
+parser.add_argument('--algo', type=str, default='ppo',help='Choose ppo, acer, seppo')
 
 if __name__ == '__main__':
   # BLAS setup

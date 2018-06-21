@@ -9,7 +9,7 @@ from torch.nn import functional as F
 from memory import EpisodicReplayMemory
 from model import ActorCritic
 from utils import state_to_tensor
-
+from time import sleep
 
 # Knuth's algorithm for generating Poisson samples
 def _poisson(lmbd):
@@ -127,6 +127,8 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     if off_policy:
       # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
       bias_weight = (1 - args.trace_max / rho).clamp(min=0) * policies[i]
+      print (bias_weight)
+      sleep(10)
       single_step_policy_loss -= (bias_weight * policies[i].log() * (Qs[i].detach() - Vs[i].expand_as(Qs[i]).detach())).sum(1).mean(0)
     if args.trust_region:
       # Policy update dθ ← dθ + ∂θ/∂θ∙z*
@@ -233,7 +235,7 @@ def train(rank, args, T, shared_model, shared_average_model, optimiser):
         Qret = Qret.detach()
 
       # Train the network on-policy
-      _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, average_policies)
+      # _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions, rewards, Qret, average_policies)
 
       # Finish on-policy episode
       if done:
