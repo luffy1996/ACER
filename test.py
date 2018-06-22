@@ -22,7 +22,7 @@ def test(rank, args, T, shared_model):
   rewards, steps = [], []  # Rewards and steps for plotting
   l = str(len(str(args.T_max)))  # Max num. of digits for logging steps
   done = True  # Start new episode
-
+  best = -math.inf
   while T.value() <= args.T_max:
     if can_test:
       t_start = T.value()  # Reset counter
@@ -89,6 +89,9 @@ def test(rank, args, T, shared_model):
         writer.writerow(fields) 
       if args.evaluate:
         return
+      if (T.value()>(args.num_processes*args.replay_start) and average_rewards > best):
+        torch.save(model.state_dict(), 'results/'+args.name+'/model_'+str(t_start)+'.pth')  # Save model params
+        best = average_rewards
 
       rewards.append(avg_rewards)  # Keep all evaluations
       steps.append(t_start)
