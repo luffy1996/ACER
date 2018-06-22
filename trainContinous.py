@@ -21,8 +21,7 @@ def _multivariate_normal_pdf(x, mu, sigma=None):
   X = X**2
   X = X.sum()
   X = X/(0.09)
-  # f = torch.exp(-X*0.5)/( (((2*math.pi)*(d))**0.5)* (0.3**(d)) )
-  f = torch.exp(-X*0.5)/( ( (2*math.pi)**0.5 )* (0.3**(d)) )
+  f = torch.exp(-X*0.5)/ torch.sqrt( torch.tensor([2*math.pi*(0.09**(d))])) 
   return f
 
 # Knuth's algorithm for generating Poisson samples
@@ -34,10 +33,15 @@ def _poisson(lmbd):
   return max(k - 1, 0)
 
 def _importance_sampling(pie, beta, action):
-  rho = np.array([(_multivariate_normal_pdf(action, pie) / _multivariate_normal_pdf(action, beta)).detach()])
-  rho[np.isnan(rho)] = 1
-  rho = np.nan_to_num(rho)
-  return max(rho[0],0.00001)
+  sz = len(pie)
+
+  assert sz == len(beta) and sz == len(action)
+  rho = torch.ones((sz,1), dtype=torch.float32)
+
+  for i in range(sz):
+    rho[i] = (_multivariate_normal_pdf(action[i], pie[i]) / _multivariate_normal_pdf(action[i], beta[i])).detach()
+  rho = rho.clamp(min= 0.000001)
+  return rho
 
 # Transfers gradients from thread-specific model to shared model
 def _transfer_grads_to_shared_model(model, shared_model):
@@ -132,70 +136,64 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
   for i in reversed(range(t)):
     curr_policy = policies[i]
     old_policy = old_policies[i]
+    sz = len(curr_policy) # Size of batch
 
     # Importance sampling weights ρ ← π(∙|s_i) / µ(∙|s_i); 1 for on-policy
-    rho = _importance_sampling(curr_policy.detach(), old_policy.detach(), actions[i])
 
     # _multivariate_normal_pdf(actions[i], curr_policy) / _multivariate_normal_pdf(actions[i], old_policy)
-    # rho = rho.detach()  
     # Qopc ← r_i + γQopc
     Qopc = rewards[i] + args.discount * Qopc
     Qopc = Qopc.detach()
     # Qret ← r_i + γQret
     Qret = rewards[i] + args.discount * Qret
     Qret = Qret.detach()
-    # Advantage A ← Qret - V(s_i; θ)
-    A = Qret- Vs[i]
+
+    A = Qret - Vs[i]
     # Advantage Aopc ← Qopc - V(s_i; θ)
     Aopc = Qopc - Vs[i]
+    Amodel = Qs[i].detach() - Vs[i].detach()
     # Log policy log(π(a_i|s_i; θ)) . The pie comes from distribution of multivariate Gaussian.
-    f_i_val = _multivariate_normal_pdf(actions[i], curr_policy).clamp(min=0.0001)
+    f_i_val = torch.ones((sz, 1), dtype=torch.float32)
+
+    for k in range(sz):
+      f_i_val[k] = _multivariate_normal_pdf(actions[i][k], curr_policy[k]).clamp(min=0.000001)
     log_f = f_i_val.log()
+    rho = _importance_sampling(curr_policy.detach(), old_policy.detach(), actions[i])
+    rho_ = rho.clamp(max=args.trace_max).detach()
 
-    # Use Aopc for the actor learning.
-
-    # g ← min(c, ρ_a_i)∙∇θ∙log(π(a_i|s_i; θ))∙A
-    with torch.no_grad():
-      new_rho = torch.from_numpy(np.array([rho]))
-      new_rho = new_rho.clamp(max = args.trace_max).item()
-    single_step_policy_loss = -new_rho * log_f * Aopc.detach().mean(0)  # Average over batch
+    single_step_policy_loss = (-rho_ * log_f * Aopc.detach()).mean(0)  # Average over batch
 
     # Off-policy bias correction
     # g ← g + Σ_a [1 - c/ρ_a]_+∙π(a|s_i; θ)∙∇θ∙log(π(a|s_i; θ))∙(Q(s_i, a; θ) - V(s_i; θ)
     # with torch.no_grad():
-    rho_dash = torch.from_numpy(np.array([_importance_sampling(curr_policy, old_policy, actions_dash[i])]))
-
-    # _multivariate_normal_pdf(actions_dash[i], curr_policy) / _multivariate_normal_pdf(actions_dash[i], old_policy)
-    bias_weight = torch.tensor([max(0.,(1 - args.trace_max / rho_dash.detach()))])
-
-    f_idash_val = _multivariate_normal_pdf(actions_dash[i], curr_policy).clamp(min=0.0001,max = 100000)
-    # print('f_idash_val' , f_idash_val)
-    # print ('QS CHECK' , Qs[i],'Vs', Vs[i])
-    # print ('QS check ',(Qs[i].detach() - Vs[i].detach()))
-    # print ('f val', f_idash_val.log())
-    single_step_policy_loss -= (bias_weight[0] * f_idash_val.log() * (Qs[i].detach() - Vs[i].detach())).sum(1).mean(0)
-    # print ('single_step_policy_loss Check',single_step_policy_loss.item())  
-
+    rho_dash = _importance_sampling(curr_policy, old_policy, actions_dash[i])
+    # print (rho_dash)
+    bias_weight = (1 - args.trace_max / rho_dash.detach()).clamp(min=0)
+    # print (bias_weight)
+    # sleep(10)
+    f_idash_val = torch.ones((sz, 1), dtype=torch.float32)
+    for k in range(sz):
+      f_idash_val[k] = _multivariate_normal_pdf(actions_dash[i][k], curr_policy).clamp(min=0.000001)
+    # f_idash_val = f_idash_val
+    log_f_idash = f_idash_val.log()
+    single_step_policy_loss -= (bias_weight * log_f_idash * Amodel).mean(0)
+    # print ((bias_weight * log_f_idash * Amodel).mean(0))
+    # sleep(10)
     if args.trust_region:
       # Policy update dθ ← dθ + ∂θ/∂θ∙z*
       policy_loss += _trust_region_loss(model, curr_policy, average_policies[i], single_step_policy_loss, args.trust_region_threshold)
     else:
       # Policy update dθ ← dθ + ∂θ/∂θ∙g
       policy_loss += single_step_policy_loss
-    # print ('Entropy Check',policy_loss.item())
+  
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ)
-    policy_loss -= args.entropy_weight * -(f_idash_val.log() * f_idash_val).sum().mean(0)  # Sum over probabilities, average over batch
+    policy_loss -= args.entropy_weight * -(log_f_idash.float() * f_idash_val.float()).sum(1).mean(0)  # Sum over probabilities, average over batch
 
-    # Value update dθ ← dθ - ∇θ∙1/2∙(Qret - Q(s_i, a_i; θ))^2
-    # This will be Qret. No changes here
     value_loss += ((Qret - Qs[i]) ** 2 / 2).mean(0)  # Least squares loss
 
-    # Truncated importance weight ρ¯_a_i = min(1, ρ_a_i)
-    # with torch.no_grad():
-    truncated_rho = (torch.from_numpy(np.array([rho])).clamp(max = 1.))**(1/action_size)
-    truncated_rho = truncated_rho.item()
+    # Calculating Ci for Q retrace
+    truncated_rho = (rho.clamp(max=1.).detach())**(1/action_size)
     # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
-    # print(type(truncated_rho), type((Qret.detach() - Qs[i].detach())), type(Vs[i]))
     Qret = truncated_rho * (Qret.detach() - Qs[i].detach()) + Vs[i].detach()
     # Qret ← 1∙(Qopc - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qopc = (Qopc.detach() - Qs[i].detach()) + Vs[i].detach()
@@ -205,15 +203,61 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
   _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
 
 
+def learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank):
+  for _ in range(_poisson(args.replay_ratio)):
+    # Act and train off-policy for a batch of (truncated) episode
+    # print (args.batch_size)
+    trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
+
+    # Reset hidden state
+    hx, avg_hx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
+    cx, avg_cx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
+    
+    # Lists of outputs for training
+    policies, Qs, Vs,actions_dash, actions, rewards, old_policies, average_policies = [], [], [], [], [], [], [], []
+
+    # Loop over trajectories (bar last timestep)
+    for i in range(len(trajectories) - 1):
+
+      # Unpack first half of transition
+      state = Variable(torch.cat(tuple((trajectory.state for trajectory in trajectories[i])), dim=0))
+      action = Variable(torch.Tensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
+      reward = Variable(torch.Tensor([trajectory.reward for trajectory in trajectories[i]])).unsqueeze(1)
+      old_policy = Variable(torch.cat(tuple((trajectory.policy for trajectory in trajectories[i])), 0))
+      # print ('Check states')
+      # print (state)
+      # Calculate policy and values
+      policy, Q, V,action_dash,  (hx, cx) = model(Variable(state),  (hx, cx))
+      average_policy, _, _ ,_ , (avg_hx, avg_cx)  = shared_average_model(Variable(state),  (avg_hx, avg_cx))
+      # action_dash = action_dash.clamp(min=-2.0,max=2.0) 
+      # print (old_policy, '##')
+      # sleep(20)
+      # Save outputs for offline training
+      [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions_dash, actions, rewards, average_policies, old_policies),
+                                         (policy, Q, V, action_dash, action, reward, average_policy, old_policy))]
+
+      # Unpack second half of transition
+      next_state = torch.cat(tuple((trajectory.state for trajectory in trajectories[i + 1])), 0)
+      done_ = Variable(torch.Tensor([trajectory.action is None for trajectory in trajectories[i + 1]]).unsqueeze(1))
+
+    # Do forward pass for all transitions
+    _, _, Qret, _, _ = model(Variable(next_state), (hx, cx))
+    # Qret = 0 for terminal s, V(s_i; θ) otherwise
+    Qret = ((1 - done_) * Qret).detach()
+
+    # Train the network off-policy
+    _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs,
+           actions_dash, actions, rewards, Qret, average_policies, old_policies=old_policies)
+
 # Acts and trains model
 def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
   torch.manual_seed(args.seed + rank)
 
-  env = gym.make(args.env)
+  env = gym.make(args.env).unwrapped
   env.seed(args.seed + rank)
   model = ContinousActorCritic(env.observation_space, env.action_space, args.hidden_size)
   model.train()
-
+  # print(env.action_space)
   # Normalise memory capacity by number of training processes
   memory = EpisodicReplayMemory(args.memory_capacity // args.num_processes, args.max_episode_length)
 
@@ -234,19 +278,21 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         cx, avg_cx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
         state = state_to_tensor(env.reset())
         done, episode_length = False, 0
-      else:
-        # Perform truncated backpropagation-through-time
-        hx = hx.detach()
-        cx = cx.detach()
+      # else:
+      #   # Perform truncated backpropagation-through-time
+      #   hx = hx.detach()
+      #   cx = cx.detach()
 
-      while not done:
+      while not done and t - t_start < args.t_max:
         # Calculate policy and values
         policy, Q, V, action, (hx, cx) = model(Variable(state), (hx, cx))
         average_policy, _, _, _, (avg_hx, avg_cx) = shared_average_model(Variable(state), (avg_hx, avg_cx))
 
         # Perform Action
         # action = action.clamp(min=-2.0,max=2.0) 
-        next_state, reward, done, _ = env.step(action)
+        # print (action[0])
+        # sleep(10)
+        next_state, reward, done, _ = env.step(action[0])
         next_state = state_to_tensor(next_state)
         # TODO Check clamp rewards
         reward = args.reward_clip and min(max(reward, -2.0), 2.0) or reward  # Optionally clamp rewards
@@ -263,8 +309,10 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
         # Update state
         state = next_state
 
-      # Break graph for last values calculated (used for targets, not directly as model outputs)
-      # The else statement is not needed here . Because we ain't doing the A3C Update. # CHECK
+      # Train the network when enough experience has been collected
+      if len(memory) >= args.replay_start:
+        # Sample a number of off-policy episodes based on the replay ratio
+        learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank)
       if done:
         # Qret = 0 for terminal state
         Qret = Variable(torch.zeros(1, 1))   
@@ -274,53 +322,6 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
       # Finish episode
       if done:
         break
-
-    # Train the network when enough experience has been collected
-    if len(memory) >= args.replay_start:
-      # Sample a number of off-policy episodes based on the replay ratio
-      for _ in range(args.replay_ratio):
-        # Act and train off-policy for a batch of (truncated) episode
-
-        trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
-
-        # Reset hidden state
-        hx, avg_hx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
-        cx, avg_cx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
-        
-        # Lists of outputs for training
-        policies, Qs, Vs,actions_dash, actions, rewards, old_policies, average_policies = [], [], [], [], [], [], [], []
-
-        # Loop over trajectories (bar last timestep)
-        for i in range(len(trajectories) - 1):
-
-          # Unpack first half of transition
-          state = Variable(torch.cat(tuple((trajectory.state for trajectory in trajectories[i])), dim=0))
-          action = Variable(torch.Tensor([trajectory.action for trajectory in trajectories[i]])).unsqueeze(1)
-          reward = Variable(torch.Tensor([trajectory.reward for trajectory in trajectories[i]])).unsqueeze(1)
-          old_policy = Variable(torch.cat(tuple((trajectory.policy for trajectory in trajectories[i])), 0))
-          # print ('Check states')
-          # print (state)
-          # Calculate policy and values
-          policy, Q, V,action_dash,  (hx, cx) = model(Variable(state),  (hx, cx))
-          average_policy, _, _ ,_ , (avg_hx, avg_cx)  = shared_average_model(Variable(state),  (avg_hx, avg_cx))
-          # action_dash = action_dash.clamp(min=-2.0,max=2.0) 
-
-          # Save outputs for offline training
-          [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions_dash, actions, rewards, average_policies, old_policies),
-                                             (policy, Q, V, action_dash, action, reward, average_policy, old_policy))]
-
-          # Unpack second half of transition
-          next_state = torch.cat(tuple((trajectory.state for trajectory in trajectories[i + 1])), 0)
-          done = Variable(torch.Tensor([trajectory.action is None for trajectory in trajectories[i + 1]]).unsqueeze(1))
-
-        # Do forward pass for all transitions
-        _, _, Qret, _, _ = model(Variable(next_state), (hx, cx))
-        # Qret = 0 for terminal s, V(s_i; θ) otherwise
-        Qret = ((1 - done) * Qret).detach()
-
-        # Train the network off-policy
-        _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs,
-               actions_dash, actions, rewards, Qret, average_policies, old_policies=old_policies)
     done = True
 
   env.close()

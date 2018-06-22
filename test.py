@@ -60,7 +60,7 @@ def test(rank, args, T, shared_model):
           #   sleep(10)
 
           action = action.clamp(min=-2.0,max=2.0) 
-          state, reward, done, _ = env.step(action)
+          state, reward, done, _ = env.step(action[0])
           state = state_to_tensor(state)
           # if (math.isnan(reward)):
           #   print (state, done, action)

@@ -70,33 +70,26 @@ class ContinousActorCritic(nn.Module):
     policy = self.fc_actor(x)  # Prevent 1s and hence NaNs
     V = self.fc_critic_value(x)
     # Adding state and action for stochiastic duelling network
-    # TODO Add Noise
-    actions = policy.data
 
-    action_samples = [Variable(torch.normal(policy.data, torch.exp(torch.ones(policy.size(0), 1))*0.09)) for _ in range(5)]
+    # TODO Add Noise
+    # print (policy.data,'###############' ,torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*0.01))
+    # print (policy.size())
+    # sleep(10)
+    action = policy.data + torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*0.01)
+
+    action_samples = [Variable(torch.normal(policy.data, torch.ones(policy.size()))*0.09) for _ in range(5)]
     # print (action_samples)
     # sleep(10)
     advantage_samples = torch.cat([self.Advantage(x, action_sample).unsqueeze(-1) for action_sample in action_samples], -1)
-    A = self.Advantage(x, actions)
+    A = self.Advantage(x, action)
     Q = V + A - advantage_samples.mean(-1)
-    # print(Q.data,V.data,A.data, action_samples,advantage_samples)
-    # sleep(0.01)
-    # if(math.isnan(policy.data)):
-    # print("debug 1")
-    # g_t = Q.detach().numpy()[0]
-    # if math.isnan(g_t) :
-    #   print (x1.data, x.data)
-    #   print ('####################################')
-    #   print(state, x1.data, x.data, Q.data,V.data,A.data, action_samples,advantage_samples)
-    #   # import ipdb; ipdb.set_trace()
-    #   sleep(100)
-    # print(Q.data,V.data,A.data, action_samples,advantage_samples)
-    # sleep(10)
-    return policy, Q, V, actions, h
+    # print (policy, '##')
+    # sleep(20)
+    return policy, Q, V, action, h
 
   
-  def Advantage(self, x, actions):
-    hidden = x + self.action_input_layer(actions)
+  def Advantage(self, x, action):
+    hidden = x + self.action_input_layer(action)
     A = self.fc_critic_advantage(hidden)
     return A
 

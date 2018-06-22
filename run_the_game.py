@@ -60,7 +60,7 @@ if __name__ == '__main__':
   for k, v in vars(args).items():
     print(' ' * 26 + k + ': ' + str(v))
   if (args.continous):
-    args.env = 'Pendulum-v0'
+    args.env = 'MountainCarContinuous-v0'
   else:
     args.env = 'CartPole-v1'  # TODO: Remove hardcoded environment when code is more adaptable
   # mp.set_start_method(platform.python_version()[0] == '3' and 'spawn' or 'fork')  # Force true spawning (not forking) if available
@@ -77,6 +77,8 @@ if __name__ == '__main__':
   # Create average network
   # Create optimiser for shared network parameters with shared statistics
   episodeNum = 0
+  rew = 0
+  n = 1
   while (True):
     t_value = 0
     done = False
@@ -84,10 +86,12 @@ if __name__ == '__main__':
     env.render()
     # hx, cx = Variable(torch.zeros(1, args.hidden_size)), Variable(torch.zeros(1, args.hidden_size))
     rewards = []
+    hx = torch.zeros(1, args.hidden_size)
+    cx = torch.zeros(1, args.hidden_size)
     with torch.no_grad():
       while(not done and t_value < args.max_episode_length):
-        policy, _, _, _ = model(Variable(state))
-        action = policy.data
+        policy, _, _, action, (hx, cx) = model(Variable(state),(hx, cx))
+        # action = policy.data
         next_state, reward, done, _ = env.step(action)
         rewards.append(reward)
         env.render()
@@ -95,7 +99,9 @@ if __name__ == '__main__':
         state = next_state
         t_value += 1 
     episodeNum += 1
-    average_Rew = sum(rewards)/float(len(rewards))
+    rew = rew + sum(rewards)
+    average_Rew = rew / n
+    n = n + 1
     print('Episode number ', episodeNum , ' Total Reward ', sum(rewards),' Average Reward : ' , average_Rew, '  Steps ' , t_value)
     sleep(1)
   env.close()
