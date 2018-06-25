@@ -35,8 +35,6 @@ def test(rank, args, T, shared_model):
           if done:
             # Sync with shared model every episode
             model.load_state_dict(shared_model.state_dict())
-            hx = torch.zeros(1, args.hidden_size)
-            cx = torch.zeros(1, args.hidden_size)
             # Reset environment and done flag
             state = state_to_tensor(env.reset())
             done, episode_length = False, 0
@@ -48,7 +46,7 @@ def test(rank, args, T, shared_model):
 
           # Calculate policy
           with torch.no_grad():
-            policy, _, _, _, (hx, cx) = model(Variable(state), (hx, cx))  # Break graph for memory efficiency
+            policy, _, _, _= model(Variable(state))  # Break graph for memory efficiency
 
           # Choose action greedily
           action = policy

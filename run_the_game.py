@@ -86,11 +86,11 @@ if __name__ == '__main__':
     env.render()
     # hx, cx = Variable(torch.zeros(1, args.hidden_size)), Variable(torch.zeros(1, args.hidden_size))
     rewards = []
-    hx = torch.zeros(1, args.hidden_size)
-    cx = torch.zeros(1, args.hidden_size)
+    # hx = torch.zeros(1, args.hidden_size)
+    # cx = torch.zeros(1, args.hidden_size)
     with torch.no_grad():
       while(not done and t_value < args.max_episode_length):
-        policy, _, _, action, (hx, cx) = model(Variable(state),(hx, cx))
+        policy, _, _, action = model(Variable(state))
         # action = policy.data
         next_state, reward, done, _ = env.step(action)
         rewards.append(reward)

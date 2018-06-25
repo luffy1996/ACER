@@ -5,15 +5,6 @@ import torch
 from torch.autograd import Variable
 from time import sleep
 import math
-def _multivariate_normal_pdf(x, mu, sigma=None):
-  # Note that sigma is a 0.3 * diagnol matrix
-  X = x - mu
-  d = x.shape[-1]
-  X = X**2
-  X = X.sum()
-  X = X/(0.09)
-  f = torch.exp(-X*0.5)/( (((2*math.pi)*(d))**0.5)* (0.3**(d)) )
-  return f
 
 class ActorCritic(nn.Module):
   def __init__(self, observation_space, action_space, hidden_size):
@@ -51,7 +42,7 @@ class ContinousActorCritic(nn.Module):
     self.relu = nn.ReLU(inplace=True)
     
     self.fc1 = nn.Linear(self.state_size, hidden_size)
-    self.lstm = nn.LSTMCell(hidden_size, hidden_size)
+    self.lstm = nn.Linear(hidden_size, hidden_size)
     # self.fc2 = nn.Linear(hidden_size, hidden_size)
     self.fc_actor = nn.Linear(hidden_size, self.action_size)
     # The value is action independent
@@ -61,31 +52,26 @@ class ContinousActorCritic(nn.Module):
 
     self.fc_critic_advantage = nn.Linear(hidden_size, 1)
 
-  def forward(self, x0, h):
+  def forward(self, x0):
     Q = None
     state = x0
     x1 = self.relu(self.fc1(x0))
-    h = self.lstm(x1, h)  # h is (hidden state, cell state)
-    x = h[0]
+    h = self.lstm(x1)  # h is (hidden state, cell state)
+    x = h # TODO : Remove this line from code
     policy = self.fc_actor(x)  # Prevent 1s and hence NaNs
     V = self.fc_critic_value(x)
     # Adding state and action for stochiastic duelling network
 
-    # TODO Add Noise
-    # print (policy.data,'###############' ,torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*0.01))
-    # print (policy.size())
-    # sleep(10)
     action = policy.data + torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*0.01)
 
     action_samples = [Variable(torch.normal(policy.data, torch.ones(policy.size()))*0.09) for _ in range(5)]
-    # print (action_samples)
-    # sleep(10)
+
     advantage_samples = torch.cat([self.Advantage(x, action_sample).unsqueeze(-1) for action_sample in action_samples], -1)
     A = self.Advantage(x, action)
     Q = V + A - advantage_samples.mean(-1)
     # print (policy, '##')
     # sleep(20)
-    return policy, Q, V, action, h
+    return policy, Q, V, action
 
   
   def Advantage(self, x, action):

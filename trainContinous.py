@@ -16,6 +16,11 @@ from time import sleep
 import numpy as np
 def _multivariate_normal_pdf(x, mu, sigma=None):
   # Note that sigma is a 0.3 * diagnol matrix
+  # print (x, x.shape)
+  # print (mu, mu.shape)
+  # sleep(10)
+  if not (x.shape == mu.shape):
+    raise AssertionError()
   X = x - mu
   d = x.shape[-1]
   X = X**2
@@ -173,7 +178,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     # sleep(10)
     f_idash_val = torch.ones((sz, 1), dtype=torch.float32)
     for k in range(sz):
-      f_idash_val[k] = _multivariate_normal_pdf(actions_dash[i][k], curr_policy).clamp(min=0.000001)
+      f_idash_val[k] = _multivariate_normal_pdf(actions_dash[i][k], curr_policy[k]).clamp(min=0.000001)
     # f_idash_val = f_idash_val
     log_f_idash = f_idash_val.log()
     single_step_policy_loss -= (bias_weight * log_f_idash * Amodel).mean(0)
@@ -208,10 +213,6 @@ def learn(memory, args, model, shared_model, shared_average_model, T, optimiser,
     # Act and train off-policy for a batch of (truncated) episode
     # print (args.batch_size)
     trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
-
-    # Reset hidden state
-    hx, avg_hx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
-    cx, avg_cx = torch.zeros(args.batch_size, args.hidden_size), torch.zeros(args.batch_size, args.hidden_size)
     
     # Lists of outputs for training
     policies, Qs, Vs,actions_dash, actions, rewards, old_policies, average_policies = [], [], [], [], [], [], [], []
@@ -227,11 +228,9 @@ def learn(memory, args, model, shared_model, shared_average_model, T, optimiser,
       # print ('Check states')
       # print (state)
       # Calculate policy and values
-      policy, Q, V,action_dash,  (hx, cx) = model(Variable(state),  (hx, cx))
-      average_policy, _, _ ,_ , (avg_hx, avg_cx)  = shared_average_model(Variable(state),  (avg_hx, avg_cx))
-      # action_dash = action_dash.clamp(min=-2.0,max=2.0) 
-      # print (old_policy, '##')
-      # sleep(20)
+      policy, Q, V,action_dash = model(Variable(state))
+      average_policy, _, _ ,_ = shared_average_model(Variable(state))
+
       # Save outputs for offline training
       [arr.append(el) for arr, el in zip((policies, Qs, Vs, actions_dash, actions, rewards, average_policies, old_policies),
                                          (policy, Q, V, action_dash, action, reward, average_policy, old_policy))]
@@ -241,7 +240,7 @@ def learn(memory, args, model, shared_model, shared_average_model, T, optimiser,
       done_ = Variable(torch.Tensor([trajectory.action is None for trajectory in trajectories[i + 1]]).unsqueeze(1))
 
     # Do forward pass for all transitions
-    _, _, Qret, _, _ = model(Variable(next_state), (hx, cx))
+    _, _, Qret, _ = model(Variable(next_state))
     # Qret = 0 for terminal s, V(s_i; θ) otherwise
     Qret = ((1 - done_) * Qret).detach()
 
@@ -274,8 +273,6 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
       # Reset or pass on hidden state
       if done:
         # Reset environment and done flag
-        hx, avg_hx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
-        cx, avg_cx = torch.zeros(1, args.hidden_size), torch.zeros(1, args.hidden_size)
         state = state_to_tensor(env.reset())
         done, episode_length = False, 0
       # else:
@@ -285,13 +282,9 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
 
       while not done and t - t_start < args.t_max:
         # Calculate policy and values
-        policy, Q, V, action, (hx, cx) = model(Variable(state), (hx, cx))
-        average_policy, _, _, _, (avg_hx, avg_cx) = shared_average_model(Variable(state), (avg_hx, avg_cx))
+        policy, Q, V, action= model(Variable(state))
+        average_policy, _, _, _ = shared_average_model(Variable(state))
 
-        # Perform Action
-        # action = action.clamp(min=-2.0,max=2.0) 
-        # print (action[0])
-        # sleep(10)
         next_state, reward, done, _ = env.step(action[0])
         next_state = state_to_tensor(next_state)
         # TODO Check clamp rewards
