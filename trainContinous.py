@@ -10,7 +10,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 # from scipy.stats import multivariate_normal
 from memory import EpisodicReplayMemory
 from model import ActorCritic, ContinousActorCritic
-from utils import state_to_tensor
+from utils import state_to_tensor, plot_loss
 import math
 from time import sleep
 import numpy as np
@@ -130,10 +130,10 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
 
 
 # Trains model
-def _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions_dash, actions, rewards, Qret, average_policies, old_policies=None):
+def _train(rank, args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs, actions_dash, actions, rewards, Qret, average_policies, old_policies, loss_list):
   # TODO : Remove off Policy parameter
   action_size = policies[0].size(-1)
-  policy_loss, value_loss = 0, 0
+  policy_loss, value_loss, entropy_loss = 0, 0, 0
   # Qret has the Value V(s(t+1)) OR 0.
   Qopc = Qret
   # Calculate n-step returns in forward view, stepping backwards from the last state
@@ -192,7 +192,7 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
       policy_loss += single_step_policy_loss
   
     # Entropy regularisation dθ ← dθ + β∙∇θH(π(s_i; θ)
-    policy_loss -= args.entropy_weight * -(log_f_idash.float() * f_idash_val.float()).sum(1).mean(0)  # Sum over probabilities, average over batch
+    entropy_loss -= args.entropy_weight * -(log_f_idash.float() * f_idash_val.float()).sum(1).mean(0)  # Sum over probabilities, average over batch
 
     value_loss += ((Qret - Qs[i]) ** 2 / 2).mean(0)  # Least squares loss
 
@@ -204,11 +204,19 @@ def _train(args, T, model, shared_model, shared_average_model, optimiser, polici
     Qopc = (Qopc.detach() - Qs[i].detach()) + Vs[i].detach()
 
   # Update networks
+  loss_list[0].append(T.value())
+  loss_list[1].append(policy_loss + value_loss.item() + entropy_loss)
+  loss_list[2].append(policy_loss)
+  loss_list[3].append(value_loss.item())
+  loss_list[4].append(entropy_loss)
+  plot_loss(loss_list[0], loss_list[1], args, 'total_loss', rank)
+  plot_loss(loss_list[0], loss_list[2], args, 'actor_loss', rank)
+  plot_loss(loss_list[0], loss_list[3], args, 'critic_loss', rank)
+  plot_loss(loss_list[0], loss_list[4], args, 'entropy_loss', rank)
+  _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss + entropy_loss, optimiser)
 
-  _update_networks(args, T, model, shared_model, shared_average_model, policy_loss + value_loss, optimiser)
 
-
-def learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank):
+def learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank, loss_list):
   for _ in range(_poisson(args.replay_ratio)):
     # Act and train off-policy for a batch of (truncated) episode
     # print (args.batch_size)
@@ -245,8 +253,8 @@ def learn(memory, args, model, shared_model, shared_average_model, T, optimiser,
     Qret = ((1 - done_) * Qret).detach()
 
     # Train the network off-policy
-    _train(args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs,
-           actions_dash, actions, rewards, Qret, average_policies, old_policies=old_policies)
+    _train(rank, args, T, model, shared_model, shared_average_model, optimiser, policies, Qs, Vs,
+           actions_dash, actions, rewards, Qret, average_policies, old_policies, loss_list)
 
 # Acts and trains model
 def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
@@ -259,10 +267,13 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
   # print(env.action_space)
   # Normalise memory capacity by number of training processes
   memory = EpisodicReplayMemory(args.memory_capacity // args.num_processes, args.max_episode_length)
-
+  steps = []
+  total_loss = []
+  loss_actor = []
+  loss_critic = []
+  loss_entropy = []
   t = 1  # Thread step counter
   done = True  # Start new episode
-
   while T.value() <= args.T_max:
     while True:
       # Sync with shared model at least every t_max steps
@@ -305,7 +316,7 @@ def trainCont(rank, args, T, shared_model, shared_average_model, optimiser):
       # Train the network when enough experience has been collected
       if len(memory) >= args.replay_start:
         # Sample a number of off-policy episodes based on the replay ratio
-        learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank)
+        learn(memory, args, model, shared_model, shared_average_model, T, optimiser, rank, [steps, total_loss, loss_actor, loss_critic, loss_entropy])
       if done:
         # Qret = 0 for terminal state
         Qret = Variable(torch.zeros(1, 1))   

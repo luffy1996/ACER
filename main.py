@@ -57,11 +57,12 @@ if __name__ == '__main__':
   # Setup
   args = parser.parse_args()
   os.system('mkdir -p  results/' + args.name)
+  os.system('mkdir -p  results/' + args.name +'/loss')
   print(' ' * 26 + 'Options')
   myfile = open('results/' + args.name + '/params.txt', 'w')
   for k, v in vars(args).items():
     print(' ' * 26 + k + ': ' + str(v))
-    myfile.write(k + ' : ' + str(v))
+    myfile.write(k + ' : ' + str(v) + '\n')
   # if (args.continous):
   #   args.env = 'Pendulum-v0' # TODO: Remove hardcoded environment when code is more adaptable
   # mp.set_start_method(platform.python_version()[0] == '3' and 'spawn' or 'fork')  # Force true spawning (not forking) if available

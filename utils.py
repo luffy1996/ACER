@@ -29,6 +29,7 @@ def state_to_tensor(state):
 def plot_line(xs, ys_population,args):
   max_colour = 'rgb(0, 132, 180)'
   mean_colour = 'rgb(0, 172, 237)'
+  min_colour = 'rgb(130, 0, 180)'
   std_colour = 'rgba(29, 202, 255, 0.2)'
 
   ys = torch.Tensor(ys_population)
@@ -42,7 +43,7 @@ def plot_line(xs, ys_population,args):
   trace_upper = Scatter(x=xs, y=ys_upper.numpy(), line=Line(color='transparent'), name='+1 Std. Dev.', showlegend=False)
   trace_mean = Scatter(x=xs, y=ys_mean.numpy(), fill='tonexty', fillcolor=std_colour, line=Line(color=mean_colour), name='Mean')
   trace_lower = Scatter(x=xs, y=ys_lower.numpy(), fill='tonexty', fillcolor=std_colour, line=Line(color='transparent'), name='-1 Std. Dev.', showlegend=False)
-  trace_min = Scatter(x=xs, y=ys_min.numpy(), line=Line(color=max_colour, dash='dash'), name='Min')
+  trace_min = Scatter(x=xs, y=ys_min.numpy(), line=Line(color=min_colour, dash='dash'), name='Min')
 
   plotly.offline.plot({
     'data': [trace_upper, trace_mean, trace_lower, trace_min, trace_max],
@@ -50,3 +51,17 @@ def plot_line(xs, ys_population,args):
                    xaxis={'title': 'Step'},
                    yaxis={'title': 'Average Reward'})
   }, filename='results/'+args.name+'/rewards.html', auto_open=False)
+
+def plot_loss(xs, ys, args, name, filenum):
+  # max_colour = 'rgb(0, 132, 180)'
+  mean_colour = 'rgb(0, 172, 237)'
+  std_colour = 'rgba(29, 202, 255, 0.2)'
+  trace_mean = Scatter(x=xs, y=ys, fill='tonexty', fillcolor=std_colour, line=Line(color=mean_colour), name='Mean')
+  # trace_lower Scatter(x=xs, y=ys_min.numpy(), line=Line(color=max_colour, dash='dash'), name='Min')
+  filename = 'results/'+ args.name +'/loss/'+ name + str(filenum) + '.html' 
+  plotly.offline.plot({
+    'data': [trace_mean],
+    'layout': dict(title='Loss Function',
+                   xaxis={'title': 'Iteration'},
+                   yaxis={'title': 'Loss'})
+  }, filename=filename, auto_open=False)
