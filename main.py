@@ -63,9 +63,7 @@ if __name__ == '__main__':
   for k, v in vars(args).items():
     print(' ' * 26 + k + ': ' + str(v))
     myfile.write(k + ' : ' + str(v) + '\n')
-  # if (args.continous):
-  #   args.env = 'Pendulum-v0' # TODO: Remove hardcoded environment when code is more adaptable
-  # mp.set_start_method(platform.python_version()[0] == '3' and 'spawn' or 'fork')  # Force true spawning (not forking) if available
+
   torch.manual_seed(args.seed)
   T = Counter()  # Global shared counter
   myfile.close()
