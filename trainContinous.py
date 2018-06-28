@@ -83,9 +83,16 @@ def _update_networks(args, T, model, shared_model, shared_average_model, loss, o
   for shared_param, shared_average_param in zip(shared_model.parameters(), shared_average_model.parameters()):
     shared_average_param = args.trust_region_decay * shared_average_param + (1 - args.trust_region_decay) * shared_param
 
+# Enables/disables gradients of model apart from policy head
+def _isolate_policy_grads(model, isolate):
+  for name, param in model.named_parameters():
+    if 'fc_actor' not in name:
+      param.requires_grad = not isolate
 
 # Computes a trust region loss based on an existing loss and two distributions
 def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
+  # _isolate_policy_grads(model, True)  # Disable gradients for other parameters  
+  sz = len(distribution)
   # Compute gradients from original loss
   model.zero_grad()
   loss.backward(retain_graph=True)
@@ -94,16 +101,23 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   g = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
   model.zero_grad()
 
+  _distribution, _ref_distribution = torch.ones((sz,1),dtype=torch.float32), torch.ones((sz,1),dtype=torch.float32)
+
   # KL divergence k ← ∇θ0∙DKL[π(∙|s_i; θ_a) || π(∙|s_i; θ)]
-  # TODO : Check log()
-  action_sample = MultivariateNormal(distribution.detach(), torch.eye(distribution.shape[-1])*0.09).sample()
-  _distribution = _multivariate_normal_pdf(action_sample, distribution).clamp(min=0.000001)
-  _ref_distribution = _multivariate_normal_pdf(action_sample, ref_distribution).clamp(min=0.000001)
-  kl = (_ref_distribution * (_ref_distribution.log() - _distribution.log())).sum()
-  # Compute gradients from (negative) KL loss (increases KL divergence)
+
+  assert distribution.shape == ref_distribution.shape
+  for k in range(sz):
+    policy = distribution[k]
+    action_sample = (policy + math.sqrt(0.3)*torch.randn( policy.size() )).data
+    # print (policy, action_sample)
+    _distribution[k] = _multivariate_normal_pdf(action_sample, distribution[k]).clamp(min=0.000001)
+    _ref_distribution[k] = _multivariate_normal_pdf(action_sample, ref_distribution[k]).clamp(min=0.000001)
+  kl = (_ref_distribution * (_ref_distribution.log() - _distribution.log())).sum(1).mean(0)
   (-kl).backward(retain_graph=True)
   k = [Variable(param.grad.data.clone()) for param in model.parameters() if param.grad is not None]
+
   model.zero_grad()
+
 
   # Compute dot products of gradients
   k_dot_g = sum(torch.sum(k_p * g_p) for k_p, g_p in zip(k, g))
@@ -113,7 +127,6 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   # if k_dot_k.data[0] > 0:
   # z = 0
   if k_dot_k.item() > 0:
-    # print ('true')
     # z = 1
     trust_factor = ((k_dot_g - threshold) / k_dot_k).clamp(min=0)
   else:
@@ -124,6 +137,7 @@ def _trust_region_loss(model, distribution, ref_distribution, loss, threshold):
   for param, z_star_p in zip(model.parameters(), z_star):
     trust_loss += (param * z_star_p).sum()
   # print ('done dana done')
+  # _isolate_policy_grads(model, False)  # Re-enable gradients for other parameters
   return trust_loss
 
 
@@ -141,7 +155,6 @@ def _train(rank, args, T, model, shared_model, shared_average_model, optimiser, 
     curr_policy = policies[i]
     old_policy = old_policies[i]
     sz = len(curr_policy) # Size of batch
-
 
     # _multivariate_normal_pdf(actions[i], curr_policy) / _multivariate_normal_pdf(actions[i], old_policy)
     # Qopc ← r_i + γQopc
