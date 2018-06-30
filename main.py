@@ -41,6 +41,7 @@ parser.add_argument('--lr-decay', action='store_true', help='Linearly decay lear
 parser.add_argument('--rmsprop-decay', type=float, default=0.99, metavar='α', help='RMSprop decay factor')
 parser.add_argument('--batch-size', type=int, default=4, metavar='SIZE', help='Off-policy batch size')
 parser.add_argument('--entropy-weight', type=float, default=0.0001, metavar='β', help='Entropy regularisation weight')
+parser.add_argument('--critic-weight', type=float, default=1.0, metavar='β', help='Critic weight')
 parser.add_argument('--max-gradient-norm', type=float, default=40, metavar='VALUE', help='Gradient L2 normalisation')
 parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
 parser.add_argument('--evaluation-interval', type=int, default=10000, metavar='STEPS', help='Number of training steps between evaluations (roughly)')
@@ -101,9 +102,9 @@ if __name__ == '__main__':
     writer.writerow(fields)
   # Start validation agent
   processes = []
-  p = mp.Process(target=test, args=(0, args, T, shared_model))
-  p.start()
-  processes.append(p)
+  # p = mp.Process(target=test, args=(0, args, T, shared_model))
+  # p.start()
+  # processes.append(p)
 
   if not args.evaluate:
     # Start training agents

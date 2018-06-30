@@ -29,11 +29,11 @@ class ActorCritic(nn.Module):
 
 
 class ContinousActorCritic(nn.Module):
-  def __init__(self, observation_space, action_space, hidden_size, sigma=0.3):
+  def __init__(self, observation_space, action_space, hidden_size, min_sigma=1e-5, sigma=None):
     super(ContinousActorCritic, self).__init__()
-    self.sigma = torch.tensor([sigma])
+    # self.sigma = torch.tensor([sigma])
+    self.min_sigma = 1e-5
     self.state_size = observation_space.shape[0]
-    # Action Space for COntinous Space
     self.action_size = action_space.shape[0]
 
     self.relu = nn.ReLU(inplace=True)
@@ -42,39 +42,33 @@ class ContinousActorCritic(nn.Module):
     self.fc2 = nn.Linear(hidden_size, hidden_size)
 
     self.fc_actor = nn.Linear(hidden_size, self.action_size)
-    self.var_layer = nn.Linear(hidden_size, self.action_size)
-    self.var = nn.Softplus() # To get the softplus results
-    self.fc_critic_value = nn.Linear(hidden_size, 1)
+    self.sigma_layer = nn.Linear(hidden_size, self.action_size)
+    self.sigma = nn.Softplus() # To get the softplus results
+    self.fc_critic = nn.Linear(hidden_size, 1)
 
     self.action_input_layer = nn.Linear(self.action_size, hidden_size)
     self.fc_critic_advantage = nn.Linear(hidden_size, 1)
 
   def forward(self, x0):
-    Q = None
     state = x0
+
     x1 = self.relu(self.fc1(x0))
-    h = self.fc2(x1)  # h is (hidden state, cell state)
+    h = self.fc2(x1)
     x = h # TODO : Remove this line from code
     policy = self.fc_actor(x)  # Prevent 1s and hence NaNs
 
-    var_layer = self.var_layer(x)
-    var = self.var(var_layer)
-    print (var, policy)
-    sleep(10)
+    sigma_layer = self.sigma_layer(x)
+    sigma = self.sigma(sigma_layer) + self.min_sigma
 
-    # action = policy.data + torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*0.01)
-    action = policy.data + torch.normal(torch.zeros(policy.size()), torch.ones(policy.size())*var)
-    # m = MultivariateNormal(policy, torch.diagnol(var))
-    # action = m.sample()
-    print (action)
-    sleep(100)
-    action_samples = [Variable(m.sample()) for _ in range(5)]
+    action = (policy + sigma.sqrt()*torch.randn(policy.size())).data
+    action_samples = [Variable( (policy + sigma.sqrt()*torch.randn(policy.size())).data ) for _ in range(5)]
+
     advantage_samples = torch.cat([self.Advantage(x, action_sample).unsqueeze(-1) for action_sample in action_samples], -1)
-    print (advantage_samples)
-    sleep(100)
+
+    V = self.fc_critic(x)
     A = self.Advantage(x, action)
     Q = V + A - advantage_samples.mean(-1)
-    return policy, Q, V, action#, var.log()
+    return policy, Q, V, action, sigma
 
   
   def Advantage(self, x, action):

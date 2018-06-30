@@ -2,7 +2,8 @@
 import random
 from collections import deque, namedtuple
 
-Transition = namedtuple('Transition', ('state', 'action', 'reward', 'policy'))
+Transition = namedtuple('Transition', ('state', 'action', 'reward', 'policy', 'sigma'))
+# Transition = namedtuple('Transition', ('state', 'action', 'reward', 'policy'))
 
 
 class EpisodicReplayMemory():
@@ -13,8 +14,8 @@ class EpisodicReplayMemory():
     self.memory.append([])  # List for first episode
     self.position = 0
 
-  def append(self, state, action, reward, policy):
-    self.memory[self.position].append(Transition(state, action, reward, policy))  # Save s_i, a_i, r_i+1, µ(·|s_i)
+  def append(self, state, action, reward, policy, sigma):#, ln_var):
+    self.memory[self.position].append(Transition(state, action, reward, policy, sigma))  
     # Terminal states are saved with actions as None, so switch to next episode
     if action is None:
       self.memory.append([])
