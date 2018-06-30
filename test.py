@@ -46,10 +46,10 @@ def test(rank, args, T, shared_model):
 
           # Calculate policy
           with torch.no_grad():
-            policy, _, _, _= model(Variable(state))  # Break graph for memory efficiency
+            policy, _, _, _, sigma= model(Variable(state))  # Break graph for memory efficiency
 
           # Choose action greedily
-          action = policy
+          action = (policy + sigma.sqrt()*torch.randn(policy.size())).data
           # Step
           # if math.isnan(action):
           #   print (action)
@@ -57,7 +57,7 @@ def test(rank, args, T, shared_model):
           #   print (state)
           #   sleep(10)
 
-          action = action.clamp(min=-2.0,max=2.0) 
+          # action = action.clamp(min=-2.0,max=2.0) 
           state, reward, done, _ = env.step(action[0])
           state = state_to_tensor(state)
           # if (math.isnan(reward)):

@@ -102,9 +102,9 @@ if __name__ == '__main__':
     writer.writerow(fields)
   # Start validation agent
   processes = []
-  # p = mp.Process(target=test, args=(0, args, T, shared_model))
-  # p.start()
-  # processes.append(p)
+  p = mp.Process(target=test, args=(0, args, T, shared_model))
+  p.start()
+  processes.append(p)
 
   if not args.evaluate:
     # Start training agents

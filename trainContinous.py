@@ -172,7 +172,6 @@ def _train(rank, args, T, model, shared_model, shared_average_model, optimiser, 
     f_i_val = torch.ones((sz, 1), dtype=torch.float32)
     for k in range(sz):
       f_i_val[k] = normal(actions[i][k], curr_policy[k], sigmas[i][k]).clamp(min=0.000001)
-    print (f_i_val)  
     # Log policy log(π(a_i|s_i; θ)) . The pie comes from distribution of multivariate Gaussian.  
     log_f = f_i_val.log()
     
@@ -216,8 +215,6 @@ def _train(rank, args, T, model, shared_model, shared_average_model, optimiser, 
 
     # Qret ← 1∙(Qopc - Q(s_i, a_i; θ)) + V(s_i; θ)
     Qopc = (Qopc.detach() - Qs[i].detach()) + Vs[i].detach()
-  print('UP')
-  sleep(10)
   if not loss_list[0] or T.value() - loss_list[0][-1] > 100:
     loss_list[0].append(T.value())
     loss_list[1].append(policy_loss + value_loss.item() + entropy_loss)
@@ -232,7 +229,7 @@ def learn(memory, args, model, shared_model, shared_average_model, T, optimiser,
   for _ in range(_poisson(args.replay_ratio)):
     # Act and train off-policy for a batch of (truncated) episode
     trajectories = memory.sample_batch(args.batch_size, maxlen=args.t_max)
-    print ('training')
+    # print ('training')
     # Lists of outputs for training
     policies, sigmas, Qs, Vs, actions_dash, actions, rewards, old_policies, old_sigmas, average_policies, avg_sigmas = [], [], [], [], [], [], [], [], [], [], []
     # Loop over trajectories (bar last timestep)
