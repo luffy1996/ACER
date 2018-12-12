@@ -8,7 +8,7 @@ import torch
 from torch import multiprocessing as mp
 
 from model import ActorCritic
-from optim import SharedRMSprop
+from optim import SharedRMSprop, SharedAdam
 from seppotrain import train
 from test import test
 from utils import Counter
@@ -23,35 +23,35 @@ parser.add_argument('--max-episode-length', type=int, default=500, metavar='LENG
 parser.add_argument('--hidden-size', type=int, default=32, metavar='SIZE', help='Hidden size of LSTM cell')
 parser.add_argument('--model', type=str, metavar='PARAMS', help='Pretrained model (state dict)')
 parser.add_argument('--on-policy', action='store_true', help='Use pure on-policy training (A3C)')
-parser.add_argument('--memory-capacity', type=int, default=100000, metavar='CAPACITY', help='Experience replay memory capacity')
+parser.add_argument('--memory-capacity', type=int, default=50000, metavar='CAPACITY', help='Experience replay memory capacity')
 parser.add_argument('--replay-ratio', type=int, default=4, metavar='r', help='Ratio of off-policy to on-policy updates')
 parser.add_argument('--replay-start', type=int, default=200, metavar='EPISODES', help='Number of transitions to save before starting off-policy training')
 parser.add_argument('--discount', type=float, default=0.99, metavar='γ', help='Discount factor')
 parser.add_argument('--trace-decay', type=float, default=1, metavar='λ', help='Eligibility trace decay factor')
-parser.add_argument('--trace-max', type=float, default=10, metavar='c', help='Importance weight truncation (max) value')
-parser.add_argument('--trust-region', action='store_true', help='Use trust region')
-parser.add_argument('--trust-region-decay', type=float, default=0.99, metavar='α', help='Average model weight decay rate')
-parser.add_argument('--trust-region-threshold', type=float, default=1, metavar='δ', help='Trust region threshold value')
+parser.add_argument('--trace-max', type=float, default=5, metavar='c', help='Importance weight truncation (max) value')
+# parser.add_argument('--trust-region', action='store_true', help='Use trust region')
+# parser.add_argument('--trust-region-decay', type=float, default=0.99, metavar='α', help='Average model weight decay rate')
+# parser.add_argument('--trust-region-threshold', type=float, default=1, metavar='δ', help='Trust region threshold value')
 parser.add_argument('--reward-clip', action='store_true', help='Clip rewards to [-1, 1]')
 parser.add_argument('--lr', type=float, default=0.0007, metavar='η', help='Learning rate')
 parser.add_argument('--lr-decay', action='store_true', help='Linearly decay learning rate to 0')
 parser.add_argument('--rmsprop-decay', type=float, default=0.99, metavar='α', help='RMSprop decay factor')
-parser.add_argument('--batch-size', type=int, default=16, metavar='SIZE', help='Off-policy batch size')
-parser.add_argument('--entropy-weight', type=float, default=0.0001, metavar='β', help='Entropy regularisation weight')
+parser.add_argument('--batch-size', type=int, default=8, metavar='SIZE', help='Off-policy batch size')
+parser.add_argument('--entropy-weight', type=float, default=0.001, metavar='β', help='Entropy regularisation weight')
 parser.add_argument('--max-gradient-norm', type=float, default=40, metavar='VALUE', help='Gradient L2 normalisation')
 parser.add_argument('--evaluate', action='store_true', help='Evaluate only')
-parser.add_argument('--evaluation-interval', type=int, default=200, metavar='STEPS', help='Number of training steps between evaluations (roughly)')
+parser.add_argument('--evaluation-interval', type=int, default=500, metavar='STEPS', help='Number of training steps between evaluations (roughly)')
 parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 parser.add_argument('--render', action='store_true', help='Render evaluation agent')
-parser.add_argument('--name', type=str, default='results', help='Save folder')
+parser.add_argument('--name', type=str, default='results_c10_December12', help='Save folder')
 parser.add_argument('--env', type=str, default='CartPole-v1',help='environment name')
 ############################### Extra Added by ME ######################################
 parser.add_argument('--epoches', type=int, default=4, help='epoches length for SEPPO')
-parser.add_argument('--train-batch-size', type=int, default=32, help='Batch size for PPO style training')
+parser.add_argument('--train-batch-size', type=int, default=20, help='Batch size for PPO style training')
 parser.add_argument('--value-weight', type=float, default=0.5, help='Value weight')
 parser.add_argument('--epsilon', type=float, default=1e-8, help='Add epsilon so that NAN does not occur')
 parser.add_argument('--seppo-clip-param', type=float, default=0.2, help='PPO clip parameters')
-parser.add_argument('--max-seppo-rho-value', type=float, default=10., help='Maximum rho value')
+parser.add_argument('--max-seppo-rho-value', type=float, default=5., help='Maximum rho value')
 ########################################################################################
 
 if __name__ == '__main__':
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     shared_model.load_state_dict(torch.load(args.model))
 
   # Create optimiser for shared network parameters with shared statistics
-  optimiser = SharedRMSprop(shared_model.parameters(), lr=args.lr, alpha=args.rmsprop_decay)
+  optimiser = SharedAdam(shared_model.parameters(), lr=args.lr)
   optimiser.share_memory()
   env.close()
 
