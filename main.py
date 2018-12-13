@@ -13,6 +13,9 @@ from seppotrain import train
 from test import test
 from utils import Counter
 
+from baselines.common.vec_env.vec_video_recorder import VecVideoRecorder
+from baselines.common.vec_env.vec_frame_stack import VecFrameStack
+from baselines.common.cmd_util import common_arg_parser, parse_unknown_args, make_vec_env, make_env
 
 parser = argparse.ArgumentParser(description='SEPPO')
 parser.add_argument('--seed', type=int, default=123, help='Random seed')
@@ -41,7 +44,7 @@ parser.add_argument('--evaluation-interval', type=int, default=100, metavar='STE
 parser.add_argument('--evaluation-episodes', type=int, default=10, metavar='N', help='Number of evaluation episodes to average over')
 parser.add_argument('--render', action='store_true', help='Render evaluation agent')
 parser.add_argument('--name', type=str, default='resultsLotsofChanges_December13', help='Save folder')
-parser.add_argument('--env', type=str, default='CartPole-v1',help='environment name')
+parser.add_argument('--env', type=str, default='BeamRiderNoFrameskip-v0',help='environment name')
 ############################### Extra Added by ME ######################################
 parser.add_argument('--epoches', type=int, default=4, help='epoches length for SEPPO')
 parser.add_argument('--train-batch-size', type=int, default=5, help='Batch size for PPO style training')
@@ -76,7 +79,10 @@ if __name__ == '__main__':
   gym.logger.set_level(gym.logger.ERROR)  # Disable Gym warnings
 
   # Create shared network
-  env = gym.make(args.env)
+  # env = gym.make(args.env)
+  frame_stack_size = 4
+  env = make_vec_env(args.env, 'atari', 1, 123)
+  env = VecFrameStack(env, frame_stack_size)
   shared_model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
   shared_model.share_memory()
   if args.model and os.path.isfile(args.model):
