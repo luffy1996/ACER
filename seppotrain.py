@@ -137,6 +137,7 @@ def _train(args, T, model, shared_model, optimiser, actions, rewards, dones, qre
       batch_sampler = BatchSampler(random_sampler, args.train_batch_size, False) # drop last is false
       # Generators for batch sanpling
       # print (policy_losses)
+      # print ('No memory replay')
       for i in batch_sampler:
         # print (i)
         policy_loss, entropy_loss, value_loss = [policy_losses[j] for j in i], [entropy_losses[j] for j in i], [value_losses[j] for j in i]
@@ -154,7 +155,7 @@ def train(rank, args, T, shared_model, optimiser):
   model = ActorCritic(env.observation_space, env.action_space, args.hidden_size)
   model.train()
 
-  if not args.off_policy:
+  if not args.on_policy:
     # Normalise memory capacity by number of training processes
     memory = EpisodicReplayMemory(args.memory_capacity // args.num_processes // args.t_max, args.t_max)
 
