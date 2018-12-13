@@ -53,23 +53,29 @@ def _update_networks(args, T, model, shared_model, loss, optimiser):
   optimiser.step()
   if args.lr_decay:
     # Linearly decay learning rate
-    _adjust_learning_rate(optimiser, max(args.lr * (args.T_max - T.value()) / args.T_max, 1e-32))
+    _adjust_learning_rate(optimiser, args.lr * (1 - T.value() / args.T_max))
 
 # Trains model
-def _train(args, T, model, shared_model, optimiser, Qs, Vs, actions, rewards, dones, qret, behaviour_policies, old_policies, states, off_policy):
+def _train(args, T, model, shared_model, optimiser, actions, rewards, dones, qret, behaviour_policies, old_policies, states, on_policy):
 
   action_size = behaviour_policies[0].size(1)
   # Calculate n-step returns in forward view, stepping backwards from the last state
-  for _ in range(args.epoches):
+  total_epoches = 1 if on_policy else args.epoches
+  # print (total_epoches)
+  for _ in range(total_epoches):
     t = len(rewards)
     policy_losses, entropy_losses, value_losses = [], [], []
     # Evaluate the policies
-    if not off_policy:
+    hx, cx = None, None
+    policies, Qs, Vs = [], [], []
+    if on_policy:
       hx = torch.zeros(args.batch_size, args.hidden_size)
       cx = torch.zeros(args.batch_size, args.hidden_size)
-      policies = []
+      
       for i in range(t):
-        policy ,_ ,_ , (hx, cx) = model(states[i], (hx, cx))
+        policy ,Q, V, (hx, cx) = model(states[i], (hx, cx))
+        [arr.append(el) for arr, el in zip((Qs, Vs),
+                                           (Q, V))]
         policies.append(policy)
         hx = hx*(1-dones[i])
         cx = cx*(1-dones[i])
@@ -78,29 +84,32 @@ def _train(args, T, model, shared_model, optimiser, Qs, Vs, actions, rewards, do
       cx = torch.zeros(1, args.hidden_size)
       policies = []
       for i in range(t):
-        policy ,_ ,_ , (hx, cx) = model(states[i], (hx, cx))
+        policy ,Q ,V , (hx, cx) = model(states[i], (hx, cx))
         policies.append(policy)
+        [arr.append(el) for arr, el in zip((Qs, Vs),
+                                           (Q, V))]
         hx = hx*(1-dones[i])
         cx = cx*(1-dones[i])
     Qret = qret
     for i in reversed(range(t)):
       # Importance sampling weights ρ ← beta(∙|s_i) / pie_old(∙|s_i); 1 for ff-policy
-      rho = (old_policies[i] + args.epsilon)/ (behaviour_policies[i] + args.epsilon)
+      rho = (old_policies[i])/ (behaviour_policies[i] + args.epsilon)
 
       # Qret ← r_i + γQret
       Qret = rewards[i] + args.discount * Qret * (1 - dones[i])
       # Advantage A ← Qret - V(s_i; θ)
       A = Qret - Vs[i]
 
-      r_theta = (policies[i] + args.epsilon)/(old_policies[i] + args.epsilon)
+      r_theta = (policies[i])/(old_policies[i] + args.epsilon)
 
       # Calculate surr1 and surr2
+      eps = args.seppo_clip_param * (1 - T.value() / args.T_max)
       surr1 = r_theta * A
-      surr2 = torch.clamp(r_theta, 1. - args.seppo_clip_param,
-                          1. + args.seppo_clip_param) * A
+      surr2 = torch.clamp(r_theta, 1. - eps,
+                          1. + eps) * A
 
       # check : If bias trucation needed.
-      if not off_policy:
+      if on_policy:
         single_step_policy_loss_0 = ((torch.clamp(rho.gather(1, actions[i]), max=args.max_seppo_rho_value))*(-torch.min(surr1.gather(1, actions[i]), surr2.gather(1, actions[i])))).mean()
         single_step_policy_loss_1 = (torch.clamp(1. - args.max_seppo_rho_value/rho, min=0., max=1.)*(-torch.min(surr1, surr2))).mean()
         single_step_policy_loss = single_step_policy_loss_0 + single_step_policy_loss_1
@@ -124,23 +133,23 @@ def _train(args, T, model, shared_model, optimiser, Qs, Vs, actions, rewards, do
       truncated_rho = rho_new.gather(1, actions[i]).clamp(max=1)
       # Qret ← ρ¯_a_i∙(Qret - Q(s_i, a_i; θ)) + V(s_i; θ)
       Qret = truncated_rho * (Qret - Q.detach()) + Vs[i].detach()
-      # print (single_step_policy_loss, single_step_entropy_loss, singe_step_value_loss)
-      # sleep(1000)
-      # print('Learning Bro')
+      
     assert len(policy_losses) == len(entropy_losses)
     assert len(policy_losses) == len(value_losses)
 
-    random_sampler = RandomSampler(policy_losses) # We only need the length. Hence just send the policy_losses.
-    batch_sampler = BatchSampler(random_sampler, args.train_batch_size, False) # drop last is false
-    # Generators for batch sanpling
-    # print (policy_losses)
-    for i in batch_sampler:
-      # print (i)
-      policy_loss, entropy_loss, value_loss = [policy_losses[j] for j in i], [entropy_losses[j] for j in i], [value_losses[j] for j in i]
-      batch_loss = sum(policy_loss + entropy_loss + value_loss)/len(policy_loss)
-      _update_networks(args, T, model, shared_model, batch_loss, optimiser)
-
-
+    if on_policy:
+      random_sampler = RandomSampler(policy_losses) # We only need the length. Hence just send the policy_losses.
+      batch_sampler = BatchSampler(random_sampler, args.train_batch_size, True) # drop last is false
+      # Generators for batch sanpling
+      # print (policy_losses)
+      for i in batch_sampler:
+        # print (i)
+        policy_loss, entropy_loss, value_loss = [policy_losses[j] for j in i], [entropy_losses[j] for j in i], [value_losses[j] for j in i]
+        batch_loss = sum(policy_loss + entropy_loss + value_loss)/len(policy_loss)
+        _update_networks(args, T, model, shared_model, batch_loss, optimiser)
+    else:
+        batch_loss = sum(policy_losses + entropy_losses + value_losses)/len(policy_losses)
+        _update_networks(args, T, model, shared_model, batch_loss, optimiser)
 # Acts and trains model
 def train(rank, args, T, shared_model, optimiser):
   torch.manual_seed(args.seed + rank)
@@ -178,11 +187,11 @@ def train(rank, args, T, shared_model, optimiser):
       cx = cx.detach()
 
     ## Learn On Policy
-    Qs, Vs, actions, rewards, dones, behaviour_policies, old_policies, states = [], [], [], [], [], [], [], []
+    actions, rewards, dones, behaviour_policies, old_policies, states = [], [], [], [], [], []
 
     while t - t_start < args.t_max:
       # Calculate policy and values
-      policy, Q, V, (hx, cx) = model(state, (hx, cx))
+      policy, _, _, (hx, cx) = model(state, (hx, cx))
 
       # Sample action
       action = torch.multinomial(policy, 1)[0, 0]
@@ -190,15 +199,15 @@ def train(rank, args, T, shared_model, optimiser):
       # Step
       next_state, reward, done, _ = env.step(action.item())
       next_state = state_to_tensor(next_state)
-      reward = args.reward_clip and min(max(reward, -1), 1) or reward  # Optionally clamp rewards
+      reward = -10 if done else reward  # Optionally clamp rewards
       episode_length += 1  # Increase episode counter
       done = done or t - t_episode_start == args.max_episode_length
       # Save (beginning part of) transition for offline training
       old_policy = policy.detach()
       behaviour_policy = policy.detach()
       memory.append(state, action, reward, policy.detach(), done)  # Save just tensors
-      [arr.append(el) for arr, el in zip((Qs, Vs, actions, rewards, dones,behaviour_policies, old_policies, states),
-                                             (Q, V, torch.LongTensor([[action]]), torch.Tensor([[reward]]), done, behaviour_policy, old_policy, state))]
+      [arr.append(el) for arr, el in zip((actions, rewards, dones,behaviour_policies, old_policies, states),
+                                         (torch.LongTensor([[action]]), torch.Tensor([[reward]]), done, behaviour_policy, old_policy, state))]
       # Update state
       state = next_state
 
@@ -225,8 +234,8 @@ def train(rank, args, T, shared_model, optimiser):
     _, _, Qret, _ = model(next_state, (hx, cx))
     # Qret = 0 for terminal s, V(s_i; θ) otherwise
     Qret = ((1 - done) * Qret).detach()
-    _train(args, T, model, shared_model, optimiser, Qs, Vs,
-           actions, rewards, dones, Qret, behaviour_policies, old_policies, states, True)
+    _train(args, T, model, shared_model, optimiser,
+           actions, rewards, dones, Qret, behaviour_policies, old_policies, states, False)
     
     # Train the network off-policy when enough experience has been collected
     if len(memory) >= args.replay_start:
@@ -239,7 +248,7 @@ def train(rank, args, T, shared_model, optimiser):
         cx = torch.zeros(args.batch_size, args.hidden_size)
 
         # Lists of outputs for training
-        old_policies, Qs, Vs, actions, rewards, dones, behaviour_policies, states = [], [], [], [], [], [], [], []
+        old_policies, actions, rewards, dones, behaviour_policies, states = [], [], [], [], [], []
 
         # Loop over trajectories (bar last timestep)
         for i in range(len(trajectories) - 1):
@@ -251,24 +260,23 @@ def train(rank, args, T, shared_model, optimiser):
           done = torch.Tensor([trajectory.done for trajectory in trajectories[i]]).unsqueeze(1)
 
           # Calculate policy and values
-          policy, Q, V, (hx, cx) = model(state, (hx, cx))
+          policy, _, _, (hx, cx) = model(state, (hx, cx))
           # Old policy is the detached policy
           old_policy = policy.detach()
           # Save outputs for offline training
-          [arr.append(el) for arr, el in zip((states, Qs, Vs, actions, rewards, dones, old_policies, behaviour_policies),
-                                             (state, Q, V, action, reward, done, old_policy, behaviour_policy))]
+          [arr.append(el) for arr, el in zip((states, actions, rewards, dones, old_policies, behaviour_policies),
+                                             (state, action, reward, done, old_policy, behaviour_policy))]
 
           # Unpack second half of transition
           next_state = torch.cat(tuple(trajectory.state for trajectory in trajectories[i + 1]), 0)
-
-        # Do forward pass for all transitions
+          hx = (1-done)*hx
+          cx = (1-done)*cx
         _, _, Qret, _ = model(next_state, (hx, cx))
         # Qret = 0 for terminal s, V(s_i; θ) otherwise
         Qret = ((1 - done) * Qret).detach()
         # Train for Epoches
-        
-        _train(args, T, model, shared_model, optimiser, Qs, Vs,
-               actions, rewards, dones, Qret, behaviour_policies, old_policies, states, False)
+        _train(args, T, model, shared_model, optimiser,
+               actions, rewards, dones, Qret, behaviour_policies, old_policies, states, True)
     done = True
 
   env.close()
